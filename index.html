@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<body>
+<input type="text" id="address">
+<button onclick="createLink()">Create Link</button>
+<div id="links"></div>
+
+<script>
+function createLink() {
+    let url = document.getElementById("address").value;
+    let a = document.createElement("a");
+    a.href = url;
+    a.textContent = url;
+    a.target = "_blank";
+    document.getElementById("links").appendChild(a);
+    document.getElementById("links").appendChild(document.createElement("br"));
+}
+</script>
+</body>
+</html>
