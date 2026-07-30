@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>New Tab</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
+
+  #gameFrame {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    border: none;
+    background: #000;
+    z-index: 1000;
+    display: none;
+  }
+
+  #overlayFrame {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    border: none;
+    background: #000;
+    z-index: 2000;
+    display: none;
+  }
+</style>
+</head>
+
+<body>
+
+<div id="status">checking for updates...</div>
+<div id="content"></div>
+
+<div id="deleteContainer">
+  <button id="deleteBtn">delete all data</button>
+</div>
+
+<iframe id="gameFrame"></iframe>
+<iframe id="overlayFrame"></iframe>
+
+
+<script>
+
+const RELEASE_URL = "https://raw.githubusercontent.com/coconutc69/test-repository2/refs/heads/main/releaseversion#sites.google.com/moe.edu.sg";
+
+const statusEl = document.getElementById("status");
+const contentEl = document.getElementById("content");
+const deleteBtn = document.getElementById("deleteBtn");
+const gameFrame = document.getElementById("gameFrame");
+const overlayFrame = document.getElementById("overlayFrame");
+
+let selectedFile = null;
+let currentBlobUrl = null;
+
+
+const DB_NAME = "LauncherDB";
+const STORE_NAME = "data";
+
+
+function openDB() {
+
+  return new Promise((resolve, reject) => {
+
+    const request = indexedDB.open(DB_NAME, 1);
+
+
+    request.onupgradeneeded = () => {
+
+      const db = request.result;
+
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+
+    };
+
+
+    request.onsuccess = () => resolve(request.result);
+
+    request.onerror = () => reject(request.error);
+
+  });
+
+}
+
+
+
+async function saveData(key, value) {
+
+  const db = await openDB();
+
+
+  return new Promise((resolve, reject) => {
+
+    const tx = db.transaction(STORE_NAME, "readwrite");
+
+    tx.objectStore(STORE_NAME).put(value, key);
+
+
+    tx.oncomplete = resolve;
+
+    tx.onerror = () => reject(tx.error);
+
+  });
+
+}
+
+
+
+async function getData(key) {
+
+  const db = await openDB();
+
+
+  return new Promise((resolve, reject) => {
+
+    const tx = db.transaction(STORE_NAME, "readonly");
+
+    const request =
+      tx.objectStore(STORE_NAME).get(key);
+
+
+    request.onsuccess = () =>
+      resolve(request.result);
+
+
+    request.onerror = () =>
+      reject(request.error);
+
+  });
+
+}
+
+
+
+async function deleteData(key) {
+
+  const db = await openDB();
+
+
+  return new Promise((resolve, reject) => {
+
+    const tx = db.transaction(STORE_NAME, "readwrite");
+
+    tx.objectStore(STORE_NAME).delete(key);
+
+
+    tx.oncomplete = resolve;
+
+    tx.onerror = () => reject(tx.error);
+  });
+}
+function showUploadUI() {
+  statusEl.textContent =
+    "must be your lucky day, there's a new update!";
+  contentEl.innerHTML =
+    '<input type="file" id="patchInput" accept=".patch">' +
+    '<button id="applyPatchBtn">apply patch</button>';
+  document
+    .getElementById("patchInput")
+    .addEventListener(
+      "change",
+      handleFileSelect
+    );
+  document
+    .getElementById("applyPatchBtn")
+    .addEventListener(
+      "click",
+      applyPatch
+    );
+}
+function showLaunchUI() {
+  statusEl.textContent =
+    "click the button below to launch";
+  contentEl.innerHTML =
+    '<button id="launchBtn">launch</button>';
+  document
+    .getElementById("launchBtn")
+    .addEventListener(
+      "click",
+      launchApp
+    );
+}
+function handleFileSelect(e) {
+  selectedFile =
+    e.target.files[0] || null;
+}
+function applyPatch() {
+  if (!selectedFile) {
+    statusEl.textContent =
+      "no file selected";
+    return;
+  }
+  statusEl.textContent =
+    "reading patch...";
+  const reader =
+    new FileReader();
+  reader.onload = async function(e) {
+    statusEl.textContent =
+      "applying patch...";
+    const text =
+      e.target.result;
+    const commaIndex =
+      text.indexOf(",");
+    if (commaIndex === -1) {
+      statusEl.textContent =
+        "invalid patch file format";
+      return;
+    }
+    const releaseVersion =
+      text.substring(0, commaIndex)
+      .trim();
+    const html =
+      text.substring(commaIndex + 1);
+    try {
+      console.time("IndexedDB save");
+      await saveData(
+        "releaseVersion",
+        releaseVersion
+      );
+      await saveData(
+        "html",
+        html
+      );
+      console.timeEnd("IndexedDB save");
+      statusEl.textContent = "";
+      contentEl.innerHTML =
+        "update successful, pls refresh";
+    } catch(err) {
+      statusEl.textContent =
+        "failed saving patch: " +
+        err.message;
+    }
+  };
+  reader.onerror = function() {
+    statusEl.textContent =
+      "failed to read patch file";
+  };
+  reader.readAsText(selectedFile);
+}
+
+async function launchApp() {
+  const html =
+    await getData("html");
+  if (!html) {
+    statusEl.textContent =
+      "must be your lucky day, there's a new update!";
+    return;
+  }
+
+  // clean up any previous blob url before making a new one
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+  }
+
+  const blob =
+    new Blob(
+      [html],
+      {
+        type: "text/html"
+      }
+    );
+  currentBlobUrl = URL.createObjectURL(blob);
+
+  overlayFrame.style.display = "none";
+  overlayFrame.srcdoc = "";
+
+  gameFrame.src = currentBlobUrl;
+  gameFrame.style.display = "block";
+}
+
+function closeGame() {
+  overlayFrame.style.display = "none";
+  overlayFrame.srcdoc = "";
+}
+
+function closeLauncherFrame() {
+  gameFrame.style.display = "none";
+  gameFrame.src = "about:blank";
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
+}
+
+// Listens for messages posted from inside gameFrame. The expected shape is
+// { type: "launchGame", payload: "<base64 encoded html string>" }
+window.addEventListener("message", (event) => {
+  // only trust messages that actually came from our own gameFrame
+  if (event.source !== gameFrame.contentWindow) return;
+  if (!event.data || event.data.type !== "launchGame") return;
+
+  let decodedHtml;
+  try {
+    decodedHtml = decodeURIComponent(escape(atob(event.data.payload)));
+  } catch (err) {
+    console.error("failed to decode game payload:", err);
+    return;
+  }
+
+  overlayFrame.srcdoc = decodedHtml;
+  overlayFrame.style.display = "block";
+
+  // srcdoc iframes are same-origin, so we can inject a keydown listener
+  // directly into the overlay document once it finishes loading.
+  // This is necessary because keyboard events fire inside the focused iframe,
+  // not in the parent window, so the parent's keydown listener never sees them.
+  overlayFrame.onload = () => {
+    try {
+      overlayFrame.contentDocument.addEventListener("keydown", (e) => {
+        if (e.altKey && (e.key === "x" || e.key === "X")) {
+          e.preventDefault();
+          closeGame();
+        }
+      });
+    } catch (err) {
+      console.error("could not inject Alt+X into overlayFrame:", err);
+    }
+  };
+});
+
+// Also keep the parent-level listener as a fallback for when
+// focus happens to be in the launcher itself (e.g. before clicking in).
+window.addEventListener("keydown", (e) => {
+  if (e.altKey && (e.key === "x" || e.key === "X")) {
+    e.preventDefault();
+    closeGame();
+  }
+});
+
+
+async function deleteAllData() {
+  await deleteData("releaseVersion");
+  await deleteData("html");
+
+  closeGame();
+  closeLauncherFrame();
+
+  selectedFile = null;
+
+  statusEl.textContent =
+    "all data deleted";
+
+  contentEl.innerHTML =
+    "";
+
+}
+
+deleteBtn.addEventListener(
+  "click",
+  deleteAllData
+);
+
+async function checkForUpdate() {
+  try {
+    const res =
+      await fetch(
+        RELEASE_URL,
+        {
+          cache:"no-store"
+        }
+      );
+
+    if (!res.ok) {
+
+      throw new Error(
+        "Network response was not ok"
+      );
+    }
+
+    const latestVersion =
+      (await res.text())
+      .trim();
+
+    const localVersion =
+      await getData(
+        "releaseVersion"
+      );
+
+    if (
+      !localVersion ||
+      localVersion !== latestVersion
+    ) {
+
+      showUploadUI();
+
+    } else {
+
+      showLaunchUI();
+
+    }
+
+  } catch(err) {
+
+    statusEl.textContent =
+      "failed to check for updates: " +
+      err.message;
+  }
+}
+checkForUpdate();
+</script>
+
+</body>
+</html>
