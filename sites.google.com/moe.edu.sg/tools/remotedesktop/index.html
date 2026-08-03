@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rdp</title>
+<style>
+  body {
+    margin: 0;
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 8px;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  header h1 { font-size: 14px; margin: 0 10px 0 0; }
+  input { width: 110px; }
+  #status { margin-left: auto; font-size: 12px; }
+  #status.connected { color: green; }
+  #status.error { color: red; }
+  #screen {
+    flex: 1;
+    overflow: auto;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #placeholder { color: #aaa; font-size: 13px; text-align: center; max-width: 380px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>rdp client</h1>
+  <input id="host" placeholder="Host (e.g. 1.2.3.4)" />
+  <input id="port" placeholder="Port" value="6080" />
+  <input id="path" placeholder="Path (optional)" value="" />
+  <input id="password" type="password" placeholder="Password" />
+  <label class="chk"><input type="checkbox" id="tls" checked style="width:auto"> Use TLS (wss)</label>
+  <label class="chk"><input type="checkbox" id="scale" checked style="width:auto"> Scale to fit</label>
+  <button id="connectBtn">Connect</button>
+  <button id="disconnectBtn" class="secondary" disabled>Disconnect</button>
+  <span id="status">Not connected</span>
+</header>
+
+<div id="screen">
+  <div id="placeholder">
+    enter connection details above and click Connect.<br>
+    This client needs a VNC server + WebSocket bridge running on the target computer.<br>
+    See the setup instructions provided alongside this file.
+  </div>
+</div>
+
+<script type="module">
+  import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+  const screenEl = $('screen');
+  const connectBtn = $('connectBtn');
+  const disconnectBtn = $('disconnectBtn');
+  let rfb = null;
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || '';
+  }
+
+  function connect() {
+    const host = $('host').value.trim();
+    const port = $('port').value.trim();
+    const path = $('path').value.trim();
+    const password = $('password').value;
+    const useTls = $('tls').checked;
+
+    if (!host || !port) {
+      setStatus('Enter a host and port', 'error');
+      return;
+    }
+
+    const scheme = useTls ? 'wss' : 'ws';
+    const url = `${scheme}://${host}:${port}${path ? '/' + path.replace(/^\//, '') : ''}`;
+
+    screenEl.innerHTML = '';
+    setStatus('Connecting…');
+    connectBtn.disabled = true;
+
+    try {
+      rfb = new RFB(screenEl, url, { credentials: { password } });
+      rfb.scaleViewport = $('scale').checked;
+      rfb.resizeSession = false;
+
+      rfb.addEventListener('connect', () => {
+        setStatus('Connected', 'connected');
+        disconnectBtn.disabled = false;
+      });
+
+      rfb.addEventListener('disconnect', (e) => {
+        setStatus(e.detail && e.detail.clean ? 'Disconnected' : 'Connection failed', e.detail && e.detail.clean ? '' : 'error');
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        rfb = null;
+      });
+
+      rfb.addEventListener('credentialsrequired', () => {
+        const pw = prompt('Password required:');
+        if (rfb) rfb.sendCredentials({ password: pw || '' });
+      });
+
+      rfb.addEventListener('securityfailure', (e) => {
+        setStatus('Security/auth failure: ' + (e.detail && e.detail.reason ? e.detail.reason : 'unknown'), 'error');
+      });
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+      connectBtn.disabled = false;
+    }
+  }
+
+  function disconnect() {
+    if (rfb) {
+      rfb.disconnect();
+      rfb = null;
+    }
+    connectBtn.disabled = false;
+    disconnectBtn.disabled = true;
+    setStatus('Not connected');
+    screenEl.innerHTML = '<div id="placeholder">Disconnected.</div>';
+  }
+
+  connectBtn.addEventListener('click', connect);
+  disconnectBtn.addEventListener('click', disconnect);
+</script>
+
+</body>
+</html>
