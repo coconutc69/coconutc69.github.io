@@ -12,9 +12,36 @@ function installGame() {
 }
 
 function launch120game() {
-    window.open(
-        "https://coconutc69.github.io/sites.google.com/moe.edu.sg/games/eaglercraft/eaglercraft120.html",
-        "popup",
-        "width=800,height=600,resizable=no,scrollbars=yes"
-    );
+    const request = indexedDB.open("GameInstaller", 1);
+
+    request.onsuccess = function(event) {
+        const db = event.target.result;
+        const transaction = db.transaction("games", "readonly");
+        const store = transaction.objectStore("games");
+        const getRequest = store.get("eaglercraft 1.20");
+
+        getRequest.onsuccess = async function() {
+            const game = getRequest.result;
+
+            if (!game) {
+                return;
+            }
+
+            const popup = window.open(
+                "about:blank",
+                "popup",
+                "width=800,height=600,resizable=no,scrollbars=yes"
+            );
+
+            if (!popup) {
+                return;
+            }
+
+            const html = await game.file.text();
+
+            popup.document.open();
+            popup.document.write(html);
+            popup.document.close();
+        };
+    };
 }
