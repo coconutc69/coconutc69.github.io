@@ -4,11 +4,11 @@ function page1() {
 
 function page2() {
     document.body.innerHTML = `
-        <h1>select a game</h1>
-        <p>choose a game from the list of available games</p>
+        <h1>Select a game</h1>
+        <p>Select a game from the list and upload the install file for the game.</p>
 
         <select id="gameSelect">
-            <option value="">loading games...</option>
+            <option value="">Select a game...</option>
         </select>
 
         <br><br>
@@ -17,7 +17,7 @@ function page2() {
 
         <br><br>
 
-        <button id="installButton">install game</button>
+        <button id="installButton">Install Game</button>
 
         <p id="status"></p>
     `;
@@ -27,40 +27,27 @@ function page2() {
     const installButton = document.getElementById("installButton");
     const status = document.getElementById("status");
 
-    // Load game list from CSV
     fetch("/sites.google.com/moe.edu.sg/tools/game_installer/game_list.csv")
-        .then(response => {
-            if (!response.ok) {
-                throw new Error("could not load game_list.csv: failed to fetch");
-            }
-
-            return response.text();
-        })
+        .then(response => response.text())
         .then(csv => {
-            const lines = csv
+            const games = csv
                 .split(/\r?\n/)
-                .map(line => line.trim())
-                .filter(line => line !== "");
+                .map(game => game.trim())
+                .filter(game => game.length > 0);
 
-            gameSelect.innerHTML = `<option value="">select a game</option>`;
+            gameSelect.innerHTML = `<option value="">Select a game...</option>`;
 
-            for (let i = 1; i < lines.length; i++) {
-                const gameName = lines[i];
-
+            games.forEach(gameName => {
                 const option = document.createElement("option");
                 option.value = gameName;
                 option.textContent = gameName;
-
                 gameSelect.appendChild(option);
-            }
+            });
         })
         .catch(error => {
             console.error(error);
-            gameSelect.innerHTML = `<option value="">failed to load games</option>`;
-            status.textContent = "failed to load game list";
         });
-    
-    // indexeddb
+
     const dbRequest = indexedDB.open("GameInstaller", 1);
 
     dbRequest.onupgradeneeded = function(event) {
@@ -73,27 +60,13 @@ function page2() {
         }
     };
 
-
     installButton.addEventListener("click", function() {
         const selectedGame = gameSelect.value;
         const file = gameFile.files[0];
 
-        if (!selectedGame) {
-            status.textContent = "select a game";
+        if (!selectedGame || !file) {
             return;
         }
-
-        if (!file) {
-            status.textContent = "select a html file";
-            return;
-        }
-
-        if (!file.name.endsWith(".html") && !file.name.endsWith(".htm")) {
-            status.textContent = "upload a html file buddy";
-            return;
-        }
-
-        status.textContent = "installing...";
 
         const transaction = dbRequest.result.transaction(
             "games",
@@ -108,14 +81,5 @@ function page2() {
             filename: file.name,
             installedAt: Date.now()
         });
-
-        transaction.oncomplete = function() {
-            status.textContent = `"${selectedGame}" installed successfully!`;
-        };
-
-        transaction.onerror = function() {
-            console.error(transaction.error);
-            status.textContent = "failed to install game.";
-        };
     });
 }
