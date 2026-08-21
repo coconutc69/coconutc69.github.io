@@ -4,6 +4,11 @@ function tempdisabled() {
 
 function installGame() {
     // reminder to finish this and change the function for the button
+    window.open(
+        "https://coconutc69.github.io/sites.google.com/moe.edu.sg/tools/game_installer/index.html",
+        "popup",
+        "width=800,height=600,resizable=no,scrollbars=yes"
+    )
 }
 
 function launch120game() {
