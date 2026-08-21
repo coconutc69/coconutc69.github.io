@@ -1,5 +1,9 @@
 function tempdisabled() {
-    document.body.innerHTML = `<h1>this function has been temporarily disabled</h1>`;
+    document.body.innerHTML = `<h1>this function has been temporarily disabled or is not finished yet</h1>`;
+}
+
+function installGame() {
+    // reminder to finish this and change the function for the button
 }
 
 function launch120game() {
