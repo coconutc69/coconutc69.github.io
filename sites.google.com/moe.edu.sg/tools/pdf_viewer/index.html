@@ -13,8 +13,7 @@
 
             if (!file) return;
 
-            const url = URL.createObjectURL(file);
-            window.open(url, "_blank");
+            location.href = URL.createObjectURL(file);
         });
     </script>
 </body>
