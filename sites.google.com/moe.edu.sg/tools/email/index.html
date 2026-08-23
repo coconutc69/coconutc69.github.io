@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mail</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+
+  <header id="topbar">
+    <div id="logo">Mail</div>
+    <form id="search-form">
+      <input type="text" id="search-input" placeholder="Search Mail">
+      <button type="submit">Search Mail</button>
+      <a href="#" id="search-options-link">Show search options</a>
+    </form>
+    <div id="account-bar">
+      <span id="current-account">Not signed in</span>
+      &nbsp;|&nbsp;
+      <a href="#" id="switch-account-link">Switch account</a>
+      &nbsp;|&nbsp;
+      <a href="#" id="add-account-link">Add account</a>
+      &nbsp;|&nbsp;
+      <a href="#" id="settings-link">Settings</a>
+    </div>
+  </header>
+
+  <div id="main">
+
+    <nav id="sidebar">
+      <button id="compose-btn">Compose Mail</button>
+      <ul id="folder-list">
+        <li data-folder="inbox" class="selected">Inbox <span class="count" id="count-inbox"></span></li>
+        <li data-folder="starred">Starred</li>
+        <li data-folder="sent">Sent Mail</li>
+        <li data-folder="drafts">Drafts <span class="count" id="count-drafts"></span></li>
+        <li data-folder="all">All Mail</li>
+        <li data-folder="spam">Spam <span class="count" id="count-spam"></span></li>
+        <li data-folder="trash">Trash</li>
+      </ul>
+      <h3>Contacts</h3>
+      <ul id="contact-list"></ul>
+    </nav>
+
+    <section id="content">
+
+      <div class="toolbar">
+        <input type="checkbox" id="select-all-top" title="Select all">
+        <button class="action-btn" data-action="archive">Archive</button>
+        <button class="action-btn" data-action="spam">Report Spam</button>
+        <button class="action-btn" data-action="delete">Delete</button>
+        <select id="more-actions-top">
+          <option value="">More actions</option>
+          <option value="markread">Mark as read</option>
+          <option value="markunread">Mark as unread</option>
+          <option value="star">Add star</option>
+          <option value="unstar">Remove star</option>
+        </select>
+        <button id="refresh-btn-top">Refresh</button>
+        <span class="pagination" id="pagination-top"></span>
+      </div>
+
+      <table id="email-table">
+        <tbody id="email-list"></tbody>
+      </table>
+
+      <div class="toolbar bottom">
+        <input type="checkbox" id="select-all-bottom" title="Select all">
+        <button class="action-btn" data-action="archive">Archive</button>
+        <button class="action-btn" data-action="spam">Report Spam</button>
+        <button class="action-btn" data-action="delete">Delete</button>
+        <select id="more-actions-bottom">
+          <option value="">More actions</option>
+          <option value="markread">Mark as read</option>
+          <option value="markunread">Mark as unread</option>
+          <option value="star">Add star</option>
+          <option value="unstar">Remove star</option>
+        </select>
+        <button id="refresh-btn-bottom">Refresh</button>
+        <span class="pagination" id="pagination-bottom"></span>
+      </div>
+
+      <div id="storage-info"></div>
+
+    </section>
+  </div>
+</div>
+
+<!-- Email reading view -->
+<div id="reader-modal" class="modal hidden">
+  <div class="modal-box">
+    <a href="#" class="close-link" id="reader-close">&laquo; Back to Inbox</a>
+    <h2 id="reader-subject"></h2>
+    <div id="reader-meta"></div>
+    <hr>
+    <div id="reader-body"></div>
+    <div class="modal-actions">
+      <button id="reader-reply">Reply</button>
+      <button id="reader-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Compose window -->
+<div id="compose-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>New Message</h2>
+    <label>To: <input type="text" id="compose-to"></label>
+    <label>Subject: <input type="text" id="compose-subject"></label>
+    <textarea id="compose-body" rows="12"></textarea>
+    <div class="modal-actions">
+      <button id="compose-send">Send</button>
+      <button id="compose-discard">Discard</button>
+    </div>
+    <p class="hint" id="compose-hint"></p>
+  </div>
+</div>
+
+<!-- Account management -->
+<div id="account-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>Accounts</h2>
+
+    <div id="saved-accounts"></div>
+
+    <fieldset id="gmail-oauth-box">
+      <legend>Connect Gmail (recommended &mdash; works with no backend)</legend>
+      <label>Google OAuth Client ID:
+        <input type="text" id="gmail-client-id" placeholder="xxxxx.apps.googleusercontent.com">
+      </label>
+      <label>Google OAuth Client Secret (optional &mdash; only needed if Google requires it for your client):
+        <input type="text" id="gmail-client-secret" placeholder="leave blank if not required">
+      </label>
+      <p class="hint">Redirect URI to authorize in Google Cloud Console: <code id="gmail-redirect-uri"></code></p>
+      <div class="modal-actions">
+        <button id="gmail-connect-btn">Connect with Google</button>
+      </div>
+      <p class="hint">Uses OAuth 2.0 + PKCE and calls the Gmail API directly from this page. Your Google password is never seen by this app.</p>
+    </fieldset>
+
+    <h3>Add a manual / demo account</h3>
+    <label>Your name: <input type="text" id="acc-name"></label>
+    <label>Email address: <input type="text" id="acc-email" placeholder="you@example.com"></label>
+    <label>Password: <input type="password" id="acc-password"></label>
+
+    <label>Provider preset:
+      <select id="acc-preset">
+        <option value="custom">Custom / manual settings</option>
+        <option value="gmail">Gmail</option>
+        <option value="outlook">Outlook / Office 365</option>
+        <option value="yahoo">Yahoo Mail</option>
+        <option value="icloud">iCloud Mail</option>
+      </select>
+    </label>
+
+    <fieldset>
+      <legend>Incoming mail (IMAP)</legend>
+      <label>Server: <input type="text" id="acc-imap-host"></label>
+      <label>Port: <input type="text" id="acc-imap-port"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Outgoing mail (SMTP)</legend>
+      <label>Server: <input type="text" id="acc-smtp-host"></label>
+      <label>Port: <input type="text" id="acc-smtp-port"></label>
+    </fieldset>
+
+    <label>Backend proxy URL (optional &mdash; leave blank for offline demo mode):
+      <input type="text" id="acc-backend" placeholder="https://your-imap-proxy.example.com">
+    </label>
+
+    <div class="modal-actions">
+      <button id="acc-save">Save account</button>
+      <button id="account-modal-close">Close</button>
+    </div>
+    <p class="hint">
+      Credentials are stored only in this browser's local storage, unencrypted.
+      Since this page is static (GitHub Pages), it cannot speak IMAP/SMTP directly &mdash;
+      without a backend URL, accounts run in offline demo mode with sample mail.
+    </p>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
