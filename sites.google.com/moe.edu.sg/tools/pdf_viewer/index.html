@@ -6,14 +6,21 @@
 </head>
 <body>
     <input type="file" id="pdf" accept="application/pdf">
+    <button id="open" disabled>Open PDF in New Tab</button>
 
     <script>
+        let pdfFile = null;
+
         document.getElementById("pdf").addEventListener("change", function () {
-            const file = this.files[0];
+            pdfFile = this.files[0];
+            document.getElementById("open").disabled = !pdfFile;
+        });
 
-            if (!file) return;
+        document.getElementById("open").addEventListener("click", function () {
+            if (!pdfFile) return;
 
-            location.href = URL.createObjectURL(file);
+            const url = URL.createObjectURL(pdfFile);
+            window.open(url, "_blank");
         });
     </script>
 </body>
