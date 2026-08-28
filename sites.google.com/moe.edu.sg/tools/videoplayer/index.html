@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YouTube Prebuffer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #111;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+#setup {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+}
+
+#url {
+    width: min(600px, 90vw);
+    padding: 14px;
+    font-size: 16px;
+    border: 0;
+    border-radius: 6px;
+}
+
+button {
+    padding: 12px 25px;
+    font-size: 16px;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.5;
+}
+
+#status {
+    color: #aaa;
+    text-align: center;
+}
+
+#player {
+    position: fixed;
+    inset: 0;
+    background: black;
+    display: none;
+}
+
+.segment {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+}
+
+.segment.active {
+    display: block;
+}
+</style>
+</head>
+
+<body>
+
+<div id="setup">
+    <h1>YouTube Prebuffer</h1>
+
+    <input
+        id="url"
+        type="text"
+        placeholder="Paste YouTube URL"
+    >
+
+    <button id="load" onclick="loadVideo()">
+        Load Video
+    </button>
+
+    <div id="status">
+        Loading YouTube player...
+    </div>
+</div>
+
+<div id="player"></div>
+
+<script>
+let youtubeReady = false;
+let videoId = null;
+let duration = 0;
+let players = [];
+let segments = [];
+let currentSegment = 0;
+let started = false;
+
+function onYouTubeIframeAPIReady() {
+    youtubeReady = true;
+
+    document.getElementById("status").textContent =
+        "Paste a YouTube URL and click Load Video.";
+}
+
+function getVideoId(url) {
+    try {
+        const u = new URL(url);
+
+        if (u.hostname === "youtu.be") {
+            return u.pathname.substring(1);
+        }
+
+        if (
+            u.hostname === "youtube.com" ||
+            u.hostname === "www.youtube.com" ||
+            u.hostname === "m.youtube.com"
+        ) {
+            return u.searchParams.get("v");
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function loadVideo() {
+    if (!youtubeReady) {
+        document.getElementById("status").textContent =
+            "YouTube is still loading. Try again in a moment.";
+        return;
+    }
+
+    videoId = getVideoId(
+        document.getElementById("url").value.trim()
+    );
+
+    if (!videoId) {
+        document.getElementById("status").textContent =
+            "Invalid YouTube URL.";
+        return;
+    }
+
+    document.getElementById("load").disabled = true;
+
+    document.getElementById("status").textContent =
+        "Loading YouTube player...";
+
+    createFirstPlayer();
+}
+
+function createFirstPlayer() {
+    const container = document.getElementById("player");
+
+    container.innerHTML = "";
+
+    const div = document.createElement("div");
+
+    div.id = "segment0";
+    div.className = "segment";
+
+    container.appendChild(div);
+
+    new YT.Player(div, {
+        width: "100%",
+        height: "100%",
+        videoId: videoId,
+
+        playerVars: {
+            autoplay: 0,
+            controls: 0,
+            rel: 0,
+            playsinline: 1
+        },
+
+        events: {
+            onReady: function(event) {
+                players[0] = event.target;
+
+                waitForDuration(event.target);
+            },
+
+            onError: function(event) {
+                document.getElementById("status").textContent =
+                    "YouTube error: " + event.data;
+            }
+        }
+    });
+}
+
+function waitForDuration(player) {
+    const d = player.getDuration();
+
+    if (d > 0) {
+        duration = d;
+
+        document.getElementById("status").textContent =
+            "Video duration: " +
+            formatTime(duration);
+
+        createSegments();
+
+        return;
+    }
+
+    document.getElementById("status").textContent =
+        "Waiting for YouTube to provide video information...";
+
+    setTimeout(function() {
+        waitForDuration(player);
+    }, 500);
+}
+
+function formatTime(seconds) {
+    seconds = Math.floor(seconds);
+
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+        return (
+            hours + ":" +
+            String(minutes).padStart(2, "0") + ":" +
+            String(secs).padStart(2, "0")
+        );
+    }
+
+    return (
+        minutes + ":" +
+        String(secs).padStart(2, "0")
+    );
+}
+
+function createSegments() {
+    const container = document.getElementById("player");
+
+    const segmentLength = 30;
+    const count = Math.ceil(duration / segmentLength);
+
+    segments = [];
+
+    for (let i = 0; i < count; i++) {
+        const start = i * segmentLength;
+        const end = Math.min(
+            start + segmentLength,
+            duration
+        );
+
+        if (i === 0) {
+            segments.push({
+                start: start,
+                end: end,
+                ready: true
+            });
+
+            continue;
+        }
+
+        const div = document.createElement("div");
+
+        div.id = "segment" + i;
+        div.className = "segment";
+
+        container.appendChild(div);
+
+        segments.push({
+            start: start,
+            end: end,
+            ready: false
+        });
+
+        createSegmentPlayer(i, div, start);
+    }
+
+    updateProgress();
+}
+
+function createSegmentPlayer(index, element, start) {
+    new YT.Player(element, {
+        width: "100%",
+        height: "100%",
+
+        videoId: videoId,
+
+        playerVars: {
+            autoplay: 0,
+            controls: 0,
+            rel: 0,
+            playsinline: 1,
+            start: Math.floor(start)
+        },
+
+        events: {
+            onReady: function(event) {
+                players[index] = event.target;
+
+                event.target.seekTo(start, true);
+
+                segments[index].ready = true;
+
+                updateProgress();
+            },
+
+            onError: function(event) {
+                console.log(
+                    "Segment " +
+                    index +
+                    " error:",
+                    event.data
+                );
+            }
+        }
+    });
+}
+
+function updateProgress() {
+    const ready = segments.filter(
+        x => x.ready
+    ).length;
+
+    document.getElementById("status").textContent =
+        "Preparing video: " +
+        ready +
+        " / " +
+        segments.length +
+        " segments";
+
+    if (
+        ready === segments.length &&
+        !started
+    ) {
+        started = true;
+
+        setTimeout(startPlayback, 1000);
+    }
+}
+
+function startPlayback() {
+    const container =
+        document.getElementById("player");
+
+    document.getElementById("setup").style.display =
+        "none";
+
+    container.style.display = "block";
+
+    showSegment(0);
+
+    if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+    }
+}
+
+function showSegment(index) {
+    if (index >= segments.length) {
+        return;
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+        document
+            .getElementById("segment" + i)
+            .classList.toggle(
+                "active",
+                i === index
+            );
+    }
+
+    const player = players[index];
+
+    if (!player) {
+        return;
+    }
+
+    player.seekTo(
+        segments[index].start,
+        true
+    );
+
+    player.playVideo();
+
+    const time =
+        (segments[index].end -
+        segments[index].start) * 1000;
+
+    setTimeout(function() {
+        player.pauseVideo();
+
+        showSegment(index + 1);
+    }, time);
+}
+</script>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+
+</body>
+</html>
