@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>COMPRESSOMATIC — Multi-File Archiving Unit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="sheet">
+    <div class="perforation perforation-top"></div>
+
+    <div class="margin margin-left"></div>
+    <div class="margin margin-right"></div>
+
+    <main class="content">
+
+      <header class="header">
+        <div class="header-top">
+          <span class="header-label">MODEL Z-9</span>
+          <span class="header-label header-label-right">SER. NO. 000-ZIP</span>
+        </div>
+        <h1 class="title">COMPRESSOMATIC</h1>
+        <p class="subtitle">— multi-file archiving unit · maximum compression setting —</p>
+      </header>
+
+      <section class="panel">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Select files to compress">
+          <div class="dropzone-icon">▤</div>
+          <p class="dropzone-text">DROP FILES INTO SLOT</p>
+          <p class="dropzone-subtext">or click to browse — files stay on this device</p>
+          <input type="file" id="fileInput" multiple hidden>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="list-header">
+          <span>LN</span>
+          <span class="list-header-name">FILE NAME</span>
+          <span>SIZE</span>
+          <span></span>
+        </div>
+        <ol id="fileList" class="file-list">
+          <li class="empty-row">— no files loaded —</li>
+        </ol>
+      </section>
+
+      <section class="panel controls-row">
+        <button id="compressBtn" class="big-button" disabled>
+          <span class="big-button-label">COMPRESS</span>
+          <span class="big-button-sub">&amp; DOWNLOAD</span>
+        </button>
+
+        <div class="gauge-wrap">
+          <svg viewBox="0 0 200 120" class="gauge">
+            <path d="M20,110 A80,80 0 0,1 68,35" class="gauge-zone gauge-zone-low" />
+            <path d="M68,35 A80,80 0 0,1 132,35" class="gauge-zone gauge-zone-mid" />
+            <path d="M132,35 A80,80 0 0,1 180,110" class="gauge-zone gauge-zone-high" />
+            <line id="gaugeNeedle" x1="100" y1="110" x2="100" y2="40" class="gauge-needle" />
+            <circle cx="100" cy="110" r="6" class="gauge-hub" />
+          </svg>
+          <div class="gauge-readout">
+            <span id="gaugeText">SPACE SAVED: —</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="status-line">
+        <span class="status-label">STATUS:</span>
+        <div class="progress-track">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <span id="statusText" class="status-text">AWAITING INPUT</span>
+      </section>
+
+      <footer class="footer">
+        <p>output format: .zip · compression: DEFLATE, level 9 (max) · runs entirely in your browser</p>
+      </footer>
+
+    </main>
+
+    <div class="perforation perforation-bottom"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
