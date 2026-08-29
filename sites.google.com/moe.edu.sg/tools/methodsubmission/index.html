@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markdown Response</title>
+
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        min-height: 100vh;
+        background: #000;
+        color: #fff;
+        font-family: Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+    }
+
+    .container {
+        width: 100%;
+        max-width: 900px;
+    }
+
+    textarea,
+    .preview {
+        width: 100%;
+        min-height: 500px;
+        background: #333;
+        color: #eee;
+        border: 1px solid #555;
+        border-radius: 8px;
+        padding: 20px;
+        font-size: 16px;
+        line-height: 1.6;
+        resize: vertical;
+    }
+
+    textarea {
+        font-family: monospace;
+        outline: none;
+    }
+
+    textarea:focus {
+        border-color: #888;
+    }
+
+    .preview {
+        overflow-wrap: break-word;
+        overflow-y: auto;
+    }
+
+    .buttons {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+    }
+
+    button {
+        background: #555;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 12px 24px;
+        font-size: 16px;
+        cursor: pointer;
+    }
+
+    button:hover {
+        background: #666;
+    }
+
+    button:active {
+        background: #444;
+    }
+
+    #submitButton {
+        background: #666;
+    }
+
+    #submitButton:hover {
+        background: #777;
+    }
+
+    h1, h2, h3 {
+        color: white;
+    }
+
+    code {
+        background: #222;
+        padding: 2px 5px;
+        border-radius: 4px;
+    }
+
+    pre {
+        background: #222;
+        padding: 15px;
+        border-radius: 6px;
+        overflow-x: auto;
+    }
+
+    blockquote {
+        border-left: 4px solid #888;
+        padding-left: 15px;
+        color: #ccc;
+        margin-left: 0;
+    }
+
+    a {
+        color: #aaa;
+    }
+
+    ul, ol {
+        padding-left: 25px;
+    }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <textarea id="input" placeholder="Write your response here..."></textarea>
+
+    <div id="preview" class="preview" style="display:none;"></div>
+
+    <div class="buttons">
+        <button id="nextButton">Next</button>
+        <button id="backButton" style="display:none;">Back</button>
+        <button id="submitButton" style="display:none;">Submit</button>
+    </div>
+
+</div>
+
+<script>
+const input = document.getElementById("input");
+const preview = document.getElementById("preview");
+
+const nextButton = document.getElementById("nextButton");
+const backButton = document.getElementById("backButton");
+const submitButton = document.getElementById("submitButton");
+
+function escapeHTML(text) {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function markdownToHTML(markdown) {
+    let text = escapeHTML(markdown);
+
+    text = text.replace(
+        /^###### (.*)$/gm,
+        "<h6>$1</h6>"
+    );
+
+    text = text.replace(
+        /^##### (.*)$/gm,
+        "<h5>$1</h5>"
+    );
+
+    text = text.replace(
+        /^#### (.*)$/gm,
+        "<h4>$1</h4>"
+    );
+
+    text = text.replace(
+        /^### (.*)$/gm,
+        "<h3>$1</h3>"
+    );
+
+    text = text.replace(
+        /^## (.*)$/gm,
+        "<h2>$1</h2>"
+    );
+
+    text = text.replace(
+        /^# (.*)$/gm,
+        "<h1>$1</h1>"
+    );
+
+    text = text.replace(
+        /\*\*(.*?)\*\*/g,
+        "<strong>$1</strong>"
+    );
+
+    text = text.replace(
+        /__(.*?)__/g,
+        "<strong>$1</strong>"
+    );
+
+    text = text.replace(
+        /\*(.*?)\*/g,
+        "<em>$1</em>"
+    );
+
+    text = text.replace(
+        /_(.*?)_/g,
+        "<em>$1</em>"
+    );
+
+    text = text.replace(
+        /`([^`]+)`/g,
+        "<code>$1</code>"
+    );
+
+    text = text.replace(
+        /^> (.*)$/gm,
+        "<blockquote>$1</blockquote>"
+    );
+
+    text = text.replace(
+        /^\- (.*)$/gm,
+        "<li>$1</li>"
+    );
+
+    text = text.replace(
+        /^\* (.*)$/gm,
+        "<li>$1</li>"
+    );
+
+    text = text.replace(
+        /^\d+\. (.*)$/gm,
+        "<li>$1</li>"
+    );
+
+    text = text.replace(
+        /(<li>.*<\/li>)/gs,
+        "<ul>$1</ul>"
+    );
+
+    text = text.replace(
+        /\n{2,}/g,
+        "<br><br>"
+    );
+
+    text = text.replace(
+        /\n/g,
+        "<br>"
+    );
+
+    return text;
+}
+
+nextButton.addEventListener("click", function() {
+    preview.innerHTML = markdownToHTML(input.value);
+
+    input.style.display = "none";
+    preview.style.display = "block";
+
+    nextButton.style.display = "none";
+    backButton.style.display = "block";
+    submitButton.style.display = "block";
+});
+
+backButton.addEventListener("click", function() {
+    input.style.display = "block";
+    preview.style.display = "none";
+
+    nextButton.style.display = "block";
+    backButton.style.display = "none";
+    submitButton.style.display = "none";
+});
+
+submitButton.addEventListener("click", function() {
+    const response = input.value;
+
+    const url =
+        "https://docs.google.com/forms/d/e/1FAIpQLSel0SD-q4HBCKnhUM9L5mPOG4BkVfza4K8zdlCdPP88TsULSg/formResponse?usp=pp_url&entry.626705013="
+        + encodeURIComponent(response);
+
+    window.location.href = url;
+});
+</script>
+
+</body>
+</html>
