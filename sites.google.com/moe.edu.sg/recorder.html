@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chunk Recorder</title>
+<style>
+:root{color-scheme:dark}
+body{font:15px system-ui,sans-serif;background:#0f1115;color:#e8eaed;max-width:560px;margin:auto;padding:20px}
+h1{font-size:20px}.c{background:#1a1d24;border-radius:12px;padding:14px;margin:12px 0}
+button{background:#4f8cff;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}button.r{background:#e5484d}
+select,label{font:inherit;color:inherit}select{background:#0f1115;border:1px solid #333;border-radius:6px;padding:4px}
+.m{color:#8b93a1;font-size:13px;margin-top:6px}video{width:100%;border-radius:8px;margin-top:8px;background:#000}
+#st{font-variant-numeric:tabular-nums}
+</style></head><body>
+<div class="m" id="env"></div>
+<h1>● Chunk Recorder</h1>
+<div class="c"><b>1. Screen</b><br><br>
+<button id="pick">Select screen to record</button>
+<label><input type="checkbox" id="aud"> share audio</label>
+<div class="m" id="si">Nothing selected</div><video id="pv" muted autoplay playsinline hidden></video></div>
+<div class="c"><b>2. Project folder</b> (pick a folder inside Google Drive)<br><br>
+<button id="dir">Select folder</button><div class="m" id="di">No folder selected</div></div>
+<div class="c"><b>3. Record</b><br><br>
+Codec <select id="codec"></select> Bitrate <select id="br"><option>4</option><option selected>8</option><option>12</option><option>20</option></select> Mbps<br><br>
+<button id="start" disabled>Start recording</button> <button id="stop" class="r" disabled>Stop recording</button>
+<div class="m" id="st">Idle</div></div>
+<div class="m">Saves <code>part-0001.webm</code>, <code>part-0002.webm</code>… (1 min each). Use export.html on the same folder to merge them.</div>
+<script>
+const $=id=>document.getElementById(id);
+$('env').textContent=`secure context: ${isSecureContext}, getDisplayMedia: ${!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)}, in iframe: ${top!==self}`;
+let stream,dir,idx=1,cur,timer,ticker,t0,saved=0,bytes=0,lock,rec=false,dones=[];
+if(!window.showDirectoryPicker||!window.MediaRecorder)document.body.insertAdjacentHTML('afterbegin','<p style="color:#e5484d">Use desktop Chrome / ChromeOS Chrome.</p>');
+const types=[['video/webm;codecs=h264','H.264 (hardware, lightest)'],['video/webm;codecs=vp9','VP9'],['video/webm;codecs=vp8','VP8']].filter(t=>MediaRecorder.isTypeSupported(t[0]));
+$('codec').innerHTML=types.map(t=>`<option value="${t[0]}">${t[1]}</option>`).join('');
+const fmt=s=>[s/3600|0,s/60%60|0,s%60|0].map(n=>String(n).padStart(2,'0')).join(':');
+function upd(){$('start').disabled=!(stream&&dir&&!rec);$('stop').disabled=!rec;$('pick').disabled=rec;$('dir').disabled=rec}
+function ui(){if(rec)$('st').textContent=`● REC ${fmt((Date.now()-t0)/1000)} — ${saved} parts saved, ${(bytes/1e6).toFixed(0)} MB written`;else if(saved)$('st').textContent=`Done — ${saved} parts saved`}
+function fail(e){console.error(e);$('st').textContent='Error: '+e.message}
+$('pick').onclick=async()=>{try{
+ stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:60,max:60}},audio:$('aud').checked});
+ const t=stream.getVideoTracks()[0],s=t.getSettings();
+ $('si').textContent=`${s.width}×${s.height} @ ${Math.round(s.frameRate||0)} fps`;$('pv').hidden=false;$('pv').srcObject=stream;
+ t.onended=()=>{if(rec)stop();else{stream=null;$('pv').hidden=true;$('si').textContent='Nothing selected';upd()}};upd()}catch(e){$('si').textContent='Could not start screen share: '+e.name+' — '+e.message;console.error(e)}};
+$('dir').onclick=async()=>{try{
+ dir=await showDirectoryPicker({id:'rec',mode:'readwrite'});let max=0;
+ for await(const[n]of dir.entries()){const m=/^part-(\d+)\.webm$/.exec(n);if(m)max=Math.max(max,+m[1])}
+ idx=max+1;$('di').textContent=dir.name+(max?` (${max} existing parts — continuing at ${idx})`:'');upd()}catch(e){if(e.name!='AbortError'){$('di').textContent='Folder error: '+e.name+' — '+e.message}}};
+async function seg(){
+ const h=await dir.getFileHandle(`part-${String(idx++).padStart(4,'0')}.webm`,{create:true}),w=await h.createWritable();
+ const r=new MediaRecorder(stream,{mimeType:$('codec').value,videoBitsPerSecond:$('br').value*1e6});let q=Promise.resolve();
+ r.ondataavailable=e=>{if(e.data.size){bytes+=e.data.size;q=q.then(()=>w.write(e.data)).catch(fail)}};
+ const done=new Promise(res=>{r.onstop=()=>{q=q.then(()=>w.close()).then(()=>{saved++;ui()}).catch(fail).then(res)}});
+ dones.push(done);r.start(1000);return{r}}
+async function rotate(){const old=cur;cur=await seg();old.r.stop()}
+$('start').onclick=async()=>{try{rec=true;saved=0;bytes=0;dones=[];upd();cur=await seg();t0=Date.now();
+ timer=setInterval(rotate,60000);ticker=setInterval(ui,500);try{lock=await navigator.wakeLock.request('screen')}catch(e){}}catch(e){rec=false;fail(e);upd()}};
+async function stop(){if(!rec)return;rec=false;clearInterval(timer);clearInterval(ticker);
+ if(cur.r.state!='inactive')cur.r.stop();$('st').textContent='Finalizing…';await Promise.all(dones);
+ stream.getTracks().forEach(t=>t.stop());stream=null;$('pv').hidden=true;$('si').textContent='Nothing selected';
+ try{lock&&lock.release()}catch(e){}ui();upd()}
+$('stop').onclick=stop;
+addEventListener('beforeunload',e=>{if(rec){e.preventDefault();e.returnValue=''}});
+</script></body></html>
