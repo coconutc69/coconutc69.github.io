@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Export Frame Recording</title>
+<style>
+:root{color-scheme:dark}
+body{font:15px system-ui,sans-serif;background:#0f1115;color:#e8eaed;max-width:560px;margin:auto;padding:20px}
+h1{font-size:20px}.c{background:#1a1d24;border-radius:12px;padding:14px;margin:12px 0}
+button{background:#4f8cff;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer}
+button.r{background:#e5484d}
+button:disabled{opacity:.4;cursor:default}.m{color:#8b93a1;font-size:13px;margin-top:6px}
+select{background:#0f1115;color:#e8eaed;border:1px solid #333a47;border-radius:6px;padding:5px;font:inherit;max-width:100%}
+progress{width:100%;margin-top:10px}
+.row{margin:8px 0}
+code{background:#0f1115;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<h1>⇥ Export Frame Recording</h1>
+
+<div class="c"><b>1. Project folder</b><br><br>
+<button id="dir">Select project folder</button>
+<div class="row"><select id="ses" hidden></select></div>
+<div class="m" id="di">Pick the folder you recorded into (or a single <code>rec-…</code> folder).</div></div>
+
+<div class="c"><b>2. Settings</b>
+<div class="row">Codec <select id="codec"><option value="vp8">VP8 (faster)</option><option value="vp9">VP9 (smaller files)</option></select></div>
+<div class="row">Bitrate <select id="br"><option value="6">6 Mbps</option><option value="12" selected>12 Mbps</option><option value="20">20 Mbps</option><option value="40">40 Mbps</option></select></div>
+<div class="row">Frame timing <select id="mode">
+ <option value="60" selected>Constant 60 fps (repeats frames when the screen is still)</option>
+ <option value="30">Constant 30 fps</option>
+ <option value="vfr">Variable (only the frames that were captured)</option></select></div></div>
+
+<div class="c"><b>3. Export</b><br><br>
+<button id="go" disabled>Export video…</button> <button id="cx" class="r" hidden>Cancel</button>
+<progress id="pg" value="0" max="1" hidden></progress>
+<div class="m" id="st">Choose a recording first.</div></div>
+<div class="m">Every JPEG is decoded and re-encoded, so this is slower than the chunk exporter. Audio is copied as-is.</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let sessions=[],cur=null,cancel=false;
+if(!window.showDirectoryPicker||!window.VideoEncoder)
+ document.body.insertAdjacentHTML('afterbegin','<p style="color:#e5484d">Use a recent desktop Chrome / ChromeOS Chrome (needs WebCodecs).</p>');
+const fmt=s=>[s/3600|0,s/60%60|0,s%60|0].map(n=>String(n).padStart(2,'0')).join(':');
+
+/* ---------- tiny EBML / WebM writer ---------- */
+const cat=(...a)=>{let n=0;for(const x of a)n+=x.length;const o=new Uint8Array(n);let p=0;for(const x of a){o.set(x,p);p+=x.length}return o};
+const hex=s=>Uint8Array.from(s.match(/../g),h=>parseInt(h,16));
+const vsize=n=>{let l=1;while(l<8&&n>=2**(7*l)-1)l++;const a=new Uint8Array(l);let v=n;for(let i=l-1;i>=0;i--){a[i]=v%256;v=Math.floor(v/256)}a[0]|=1<<(8-l);return a};
+const el=(id,...p)=>{const d=cat(...p);return cat(hex(id),vsize(d.length),d)};
+const eu=(id,n)=>{let l=1;while(l<7&&n>=2**(8*l))l++;const a=new Uint8Array(l);let v=n;for(let i=l-1;i>=0;i--){a[i]=v%256;v=Math.floor(v/256)}return el(id,a)};
+const ef=(id,x)=>{const a=new Uint8Array(8);new DataView(a.buffer).setFloat64(0,x);return el(id,a)};
+const es=(id,s)=>el(id,new TextEncoder().encode(s));
+
+class Mux{
+ constructor(w,o){this.w=w;this.o=o;this.vq=[];this.aq=[];this.vLast=-1;this.aLast=o.audio?-1:Infinity;this.cl=null;this.maxMs=0}
+ async init(){
+  const o=this.o;
+  const ebml=el('1A45DFA3',eu('4286',1),eu('42F7',1),eu('42F2',4),eu('42F3',8),es('4282','webm'),eu('4287',4),eu('4285',2));
+  const seg=cat(hex('18538067'),hex('01FFFFFFFFFFFFFF'));          // Segment, unknown size
+  const pre=cat(eu('2AD7B1',1000000),es('4D80','frame-export'),es('5741','frame-export'));
+  const infoBody=cat(pre,ef('4489',0));
+  const info=cat(hex('1549A966'),vsize(infoBody.length),infoBody);
+  this.durOff=ebml.length+seg.length+4+vsize(infoBody.length).length+pre.length+3; // where Duration's 8 data bytes sit
+  const vtr=el('AE',eu('D7',1),eu('73C5',1),eu('83',1),es('86',o.vcodec),eu('9C',0),el('E0',eu('B0',o.w),eu('BA',o.h)));
+  let atr=new Uint8Array(0);
+  if(o.audio){const a=o.audio;
+   atr=el('AE',eu('D7',2),eu('73C5',2),eu('83',2),es('86','A_OPUS'),eu('9C',0),eu('56AA',a.delayNs),eu('56BB',80000000),
+    el('63A2',a.head),el('E1',ef('B5',a.sampleRate),eu('9F',a.channels)))}
+  await this.w.write(cat(ebml,seg,info,el('1654AE6B',vtr,atr)))}
+ addV(ts,d,key){this.vq.push({ts,d,key,tr:1});this.vLast=ts}
+ addA(ts,d){this.aq.push({ts,d,key:true,tr:2});this.aLast=ts}
+ // Emit blocks in timestamp order, but only up to the point where neither track can still produce an earlier one.
+ async drain(){
+  const L=Math.min(this.vLast,this.aLast);
+  while(true){
+   const v=this.vq[0],a=this.aq[0];
+   const b=v&&a?(v.ts<=a.ts?v:a):(v||a);
+   if(!b||b.ts>L)break;
+   (b===v?this.vq:this.aq).shift();
+   const ms=Math.max(0,Math.round(b.ts/1000));
+   if(!this.cl||ms-this.cl.t0>=1000){await this.flushCl();this.cl={t0:ms,parts:[]}}
+   const rel=ms-this.cl.t0,sz=vsize(4+b.d.length),blk=new Uint8Array(1+sz.length+4+b.d.length);
+   blk[0]=0xA3;blk.set(sz,1);let p=1+sz.length;
+   blk[p]=0x80|b.tr;blk[p+1]=(rel>>8)&255;blk[p+2]=rel&255;blk[p+3]=b.key?0x80:0;blk.set(b.d,p+4);
+   this.cl.parts.push(blk);
+   this.maxMs=Math.max(this.maxMs,ms+(b.tr===2?20:17))}}
+ async flushCl(){
+  const c=this.cl;if(!c)return;this.cl=null;
+  const body=cat(eu('E7',c.t0),...c.parts);
+  await this.w.write(cat(hex('1F43B675'),vsize(body.length),body))}
+ async close(){
+  this.vLast=this.aLast=Infinity;await this.drain();await this.flushCl();
+  const b=new Uint8Array(8);new DataView(b.buffer).setFloat64(0,this.maxMs);
+  await this.w.seek(this.durOff);await this.w.write(b);await this.w.close()}
+}
+
+function opusHead(ch,sr,pre){
+ const b=new Uint8Array(19),dv=new DataView(b.buffer);
+ b.set(new TextEncoder().encode('OpusHead'));b[8]=1;b[9]=ch;dv.setUint16(10,pre,true);dv.setUint32(12,sr,true);return b}
+
+/* ---------- reading a recording ---------- */
+function parseSeg(buf){
+ const dv=new DataView(buf),recs=[];
+ if(buf.byteLength<4||dv.getUint32(0)!==0x46524D31)return recs;     // 'FRM1'
+ let p=4;
+ while(p+13<=buf.byteLength){
+  const t=dv.getUint8(p),ts=dv.getFloat64(p+1),len=dv.getUint32(p+9);p+=13;
+  if(p+len>buf.byteLength)break;                                    // truncated by a crash
+  recs.push({t,ts,off:p,len});p+=len}
+ return recs}
+
+$('dir').onclick=async()=>{try{
+ const d=await showDirectoryPicker({id:'frm-exp',mode:'read'});
+ sessions=[];
+ let own=0;for await(const[n,h]of d.entries())if(h.kind==='file'&&/^seg-\d+\.frm$/.test(n))own++;
+ if(own)sessions.push({name:d.name+' (this folder)',dir:d});
+ const subs=[];for await(const[n,h]of d.entries())if(h.kind==='directory')subs.push([n,h]);
+ subs.sort((a,b)=>b[0].localeCompare(a[0]));
+ for(const[n,h]of subs){try{await h.getFileHandle('meta.json');sessions.push({name:n,dir:h})}catch(e){
+   try{for await(const[f]of h.entries())if(/^seg-\d+\.frm$/.test(f)){sessions.push({name:n,dir:h});break}}catch(_){}}}
+ const sel=$('ses');sel.innerHTML='';
+ sessions.forEach((s,i)=>sel.add(new Option(s.name,i)));
+ sel.hidden=sessions.length<2;
+ if(!sessions.length){$('di').textContent='No frame recordings (seg-*.frm files) found there.';$('go').disabled=true;cur=null;return}
+ await load(0)}catch(e){}};
+$('ses').onchange=()=>load(+$('ses').value);
+
+async function load(i){
+ $('go').disabled=true;cur=null;$('di').textContent='Reading folder…';
+ const s=sessions[i],files=[];let sz=0;
+ for await(const[n,h]of s.dir.entries()){const m=/^seg-(\d+)\.frm$/.exec(n);if(m&&h.kind==='file')files.push({n:+m[1],h})}
+ files.sort((a,b)=>a.n-b.n);
+ for(const f of files)sz+=(await f.h.getFile()).size;
+ let meta={};try{meta=JSON.parse(await(await(await s.dir.getFileHandle('meta.json')).getFile()).text())}catch(e){}
+ if(!meta.width||meta.firstVideoTs==null){          // crashed early / meta missing: recover from the first frame
+  for(const f of files){const buf=await(await f.h.getFile()).arrayBuffer();const r=parseSeg(buf).find(r=>r.t===1);
+   if(r){const bm=await createImageBitmap(new Blob([new Uint8Array(buf,r.off,r.len)],{type:'image/jpeg'}));
+    meta.width=bm.width;meta.height=bm.height;meta.firstVideoTs=r.ts;bm.close();meta.audio=meta.audio||null;break}}}
+ if(!meta.width){$('di').textContent='Could not read any frames from that folder.';return}
+ cur={files,meta,size:sz};
+ $('di').textContent=`${s.name}: ${files.length} segments (~${fmt(files.length)}), ${(sz/1e6).toFixed(0)} MB, ${meta.width}×${meta.height}${meta.audio?' + audio':''}${meta.dropped?`, ${meta.dropped} frames were dropped while recording`:''}`;
+ $('st').textContent='Ready.';$('go').disabled=false}
+
+/* ---------- export ---------- */
+function setBusy(b){$('go').disabled=b;$('dir').disabled=b;$('ses').disabled=b;$('cx').hidden=!b;$('pg').hidden=!b}
+$('cx').onclick=()=>{cancel=true};
+$('go').onclick=async()=>{
+ let out;try{out=await showSaveFilePicker({suggestedName:'recording.webm',types:[{accept:{'video/webm':['.webm']}}]})}catch(e){return}
+ cancel=false;setBusy(true);let w=null;
+ try{w=await out.createWritable();await run(w)}
+ catch(e){console.error(e);$('st').textContent=e.message==='Cancelled'?'Cancelled.':'Error: '+(e.message||e);try{await w.abort()}catch(_){}}
+ setBusy(false)};
+
+async function run(w){
+ const{files,meta:m}=cur,W=m.width,H=m.height;
+ const mode=$('mode').value,vfr=mode==='vfr',fps=vfr?60:+mode,T=1e6/fps;
+ const bps=+$('br').value*1e6;
+ const lvl=W*H<=2228224?'40':W*H<=8912896?'50':'60';
+ const vp9=['vp09.00.'+lvl+'.08','V_VP9'],vp8=['vp8','V_VP8'];
+ let cfg=null,vcodec=null,usedName='';
+ for(const[c,v]of($('codec').value==='vp9'?[vp9,vp8]:[vp8,vp9])){
+  const t={codec:c,width:W,height:H,bitrate:bps,framerate:fps,latencyMode:'quality',bitrateMode:'variable'};
+  try{if((await VideoEncoder.isConfigSupported(t)).supported){cfg=t;vcodec=v;usedName=v.slice(2);break}}catch(e){}}
+ if(!cfg)throw new Error('This browser has no VP8/VP9 encoder for that size.');
+
+ let audio=null;
+ if(m.audio&&m.audio.firstTs!=null){
+  const a=m.audio;
+  const head=a.description?Uint8Array.from(atob(a.description),c=>c.charCodeAt(0)):opusHead(a.channels,a.sampleRate,312);
+  const pre=head[10]|(head[11]<<8);
+  audio={head,sampleRate:a.sampleRate,channels:a.channels,delayNs:Math.round(pre/48000*1e9)}}
+
+ const mux=new Mux(w,{w:W,h:H,vcodec,audio});await mux.init();
+ let encErr=null;
+ const enc=new VideoEncoder({
+  output:c=>{const d=new Uint8Array(c.byteLength);c.copyTo(d);mux.addV(c.timestamp,d,c.type==='key')},
+  error:e=>{encErr=e}});
+ enc.configure(cfg);
+
+ // Audio and video may use different clock origins. If they start within 2 s of each other, trust the
+ // shared clock; otherwise assume both started together and align their first samples.
+ const fv=m.firstVideoTs,fa=audio?m.audio.firstTs:null;
+ let bv=fv,ba=fa;if(fa!=null&&Math.abs(fv-fa)<2e6)bv=ba=Math.min(fv,fa);
+
+ const pace=async()=>{
+  while(enc.encodeQueueSize>8&&!encErr)await new Promise(r=>enc.addEventListener('dequeue',r,{once:true}));
+  if(encErr)throw encErr;if(cancel)throw new Error('Cancelled')};
+ let prev=null,outK=0,lastKey=-1e9,lastRel=0,lastARel=0;
+ const push=async(bmp,ts)=>{
+  await pace();
+  const vf=new VideoFrame(bmp,vfr?{timestamp:ts}:{timestamp:ts,duration:Math.round(T)});
+  const key=ts-lastKey>=2e6;if(key)lastKey=ts;
+  enc.encode(vf,{keyFrame:key});vf.close()};
+ const onFrame=async(bmp,rel)=>{
+  rel=Math.max(rel,lastRel);lastRel=rel;
+  if(vfr){await push(bmp,Math.round(rel));bmp.close();return}
+  if(!prev){prev={bmp};return}                                     // first frame is held from t=0
+  while(outK*T+T/2<=rel){await push(prev.bmp,Math.round(outK*T));outK++}
+  prev.bmp.close();prev={bmp}};
+
+ const t0=performance.now();$('pg').max=files.length;
+ for(let i=0;i<files.length;i++){
+  if(cancel)throw new Error('Cancelled');
+  const buf=await(await files[i].h.getFile()).arrayBuffer(),recs=parseSeg(buf),vr=[];
+  for(const r of recs){
+   if(r.t===2&&audio){const rel=r.ts-ba;lastARel=Math.max(lastARel,rel);mux.addA(Math.max(0,rel),new Uint8Array(buf.slice(r.off,r.off+r.len)))}
+   else if(r.t===1)vr.push(r)}
+  const DEPTH=6,dec=[];
+  const start=k=>{if(k<vr.length&&!dec[k])dec[k]=createImageBitmap(new Blob([new Uint8Array(buf,vr[k].off,vr[k].len)],{type:'image/jpeg'})).catch(()=>null)};
+  for(let k=0;k<DEPTH;k++)start(k);
+  for(let k=0;k<vr.length;k++){
+   start(k+DEPTH);const bmp=await dec[k];dec[k]=null;
+   if(bmp)await onFrame(bmp,vr[k].ts-bv)}
+  await mux.drain();
+  const done=i+1,el_=(performance.now()-t0)/1000;
+  $('pg').value=done;
+  $('st').textContent=`Encoding ${done} / ${files.length} segments · ${(done/Math.max(el_,.1)).toFixed(2)}× realtime · about ${fmt(el_*(files.length-done)/done)} left`}
+
+ if(!vfr&&prev){
+  const endRel=Math.max(lastRel,lastARel);
+  do{await push(prev.bmp,Math.round(outK*T));outK++}while(outK*T<=endRel);
+  prev.bmp.close()}
+ $('st').textContent='Finishing…';
+ await enc.flush();if(encErr)throw encErr;enc.close();
+ await mux.close();
+ $('pg').value=files.length;
+ $('st').textContent=`Done — ${fmt(mux.maxMs/1000)} video (${usedName.toUpperCase()}${audio?' + Opus':''}) saved in ${fmt((performance.now()-t0)/1000)}.`}
+</script></body></html>

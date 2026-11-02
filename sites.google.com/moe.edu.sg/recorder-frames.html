@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Frame Recorder</title>
+<style>
+:root{color-scheme:dark}
+body{font:15px system-ui,sans-serif;background:#0f1115;color:#e8eaed;max-width:560px;margin:auto;padding:20px}
+h1{font-size:20px}.c{background:#1a1d24;border-radius:12px;padding:14px;margin:12px 0}
+button{background:#4f8cff;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer}
+button.r{background:#e5484d}
+button:disabled{opacity:.4;cursor:default}.m{color:#8b93a1;font-size:13px;margin-top:6px}
+select{background:#0f1115;color:#e8eaed;border:1px solid #333a47;border-radius:6px;padding:5px;font:inherit}
+.big{font-size:28px;font-variant-numeric:tabular-nums;margin:6px 0}
+.w{color:#f5a524}
+label{display:block;margin:4px 0;cursor:pointer}
+label input{margin-right:6px}
+.row{margin:6px 0}
+video{width:100%;max-height:170px;background:#000;border-radius:8px;margin-top:10px}
+code{background:#0f1115;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<h1>🎞 Frame Recorder</h1>
+
+<div class="c"><b>1. Project folder</b><br><br>
+<button id="dir">Select project folder</button>
+<div class="m" id="di">No folder selected. Each recording gets its own <code>rec-…</code> subfolder inside it.</div></div>
+
+<div class="c"><b>2. Screen, audio &amp; quality</b><br><br>
+<label><input type="checkbox" id="sysA" checked>Share tab / system audio</label>
+<label><input type="checkbox" id="micA">Record microphone</label>
+<div class="row">Image quality
+ <select id="q"><option value="0.92">High (largest)</option><option value="0.82" selected>Medium</option><option value="0.7">Low (smallest)</option></select>
+ &nbsp;Resolution
+ <select id="sc"><option value="1" selected>100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select></div>
+<div class="m">Tick audio options before selecting. In Chrome's picker, also tick "Also share audio".</div><br>
+<button id="sel">Select screen to share</button>
+<div class="m" id="si">Nothing selected</div>
+<video id="pv" muted autoplay playsinline hidden></video></div>
+
+<div class="c"><b>3. Record</b><br><br>
+<button id="go" disabled>Start recording</button>
+<div class="big" id="tm">00:00:00</div>
+<div class="m" id="st">Pick a folder and a screen first.</div>
+<div class="m" id="sx"></div>
+<div class="m w" id="wn" hidden></div></div>
+
+<div class="m">Every captured frame is saved as a JPEG inside <code>seg-000001.frm</code> files (about 1 second each). Merge them with <b>export-frames.html</b>.</div>
+
+<script id="wk" type="text/plain">
+let stopping=false,vReader=null,aReader=null;
+const post=(m,t)=>self.postMessage(m,t||[]);
+self.onmessage=async e=>{
+ const m=e.data;
+ if(m.type==='stop'){stopping=true;try{vReader&&vReader.cancel()}catch(_){}try{aReader&&aReader.cancel()}catch(_){}return}
+ if(m.type==='start'){
+  try{
+   const jobs=[videoLoop(m.video,m.quality,m.scale)];
+   if(m.audio)jobs.push(audioLoop(m.audio,m.abps));
+   const r=await Promise.all(jobs);
+   post({t:'done',frames:r[0].frames,dropped:r[0].dropped,lastV:r[0].last,lastA:r[1]?r[1].last:null});
+  }catch(err){post({t:'err',msg:String(err&&err.message||err)})}
+ }};
+
+async function videoLoop(readable,quality,scale){
+ const reader=readable.getReader();vReader=reader;
+ const POOL=4;const free=[];let W=0,H=0;
+ let seq=0,nextOut=0,count=0,dropped=0,last=null,inflight=0,idle=null;
+ const ready=new Map();
+ const release=()=>{
+  while(ready.has(nextOut)){
+   const r=ready.get(nextOut);ready.delete(nextOut);nextOut++;
+   if(r){count++;last=r.ts;post({t:'v',ts:r.ts,blob:r.blob,dropped,n:count})}}
+  if(!inflight&&idle){const f=idle;idle=null;f()}};
+ while(true){
+  let r;try{r=await reader.read()}catch(_){break}
+  if(r.done)break;
+  const f=r.value;
+  if(stopping){f.close();continue}
+  if(!W){
+   W=Math.max(2,Math.round(f.displayWidth*scale/2)*2);H=Math.max(2,Math.round(f.displayHeight*scale/2)*2);
+   for(let i=0;i<POOL;i++){const c=new OffscreenCanvas(W,H);free.push({c,x:c.getContext('2d',{alpha:false})})}
+   post({t:'vmeta',w:W,h:H,firstTs:f.timestamp});
+  }
+  const slot=free.pop();
+  if(!slot){dropped++;f.close();continue}   // encoder can't keep up: drop rather than pile up
+  slot.x.drawImage(f,0,0,W,H);
+  const ts=f.timestamp;f.close();
+  const my=seq++;inflight++;
+  slot.c.convertToBlob({type:'image/jpeg',quality})
+   .then(blob=>{ready.set(my,{ts,blob})},()=>{ready.set(my,null)})
+   .then(()=>{free.push(slot);inflight--;release()});
+ }
+ if(inflight)await new Promise(res=>{idle=res});
+ release();
+ return{frames:count,dropped,last};
+}
+
+async function audioLoop(readable,abps){
+ const reader=readable.getReader();aReader=reader;
+ let enc=null,last=null,sent=false,first=null;
+ while(true){
+  let r;try{r=await reader.read()}catch(_){break}
+  if(r.done)break;
+  const d=r.value;
+  if(stopping){d.close();continue}
+  if(!enc){
+   const sr=d.sampleRate,ch=Math.min(2,d.numberOfChannels);first=d.timestamp;
+   enc=new AudioEncoder({
+    output:(chunk,meta)=>{
+     const b=new Uint8Array(chunk.byteLength);chunk.copyTo(b);
+     if(!sent){
+      sent=true;let desc=null;const dc=meta&&meta.decoderConfig;
+      if(dc&&dc.description){const s=dc.description;
+       desc=(s instanceof ArrayBuffer?new Uint8Array(s):new Uint8Array(s.buffer,s.byteOffset,s.byteLength)).slice().buffer}
+      post({t:'ameta',sampleRate:sr,channels:ch,description:desc,firstTs:first},desc?[desc]:[]);
+     }
+     last=chunk.timestamp;post({t:'a',ts:chunk.timestamp,data:b.buffer},[b.buffer]);
+    },
+    error:e=>post({t:'err',msg:'Audio encoder: '+e.message})});
+   enc.configure({codec:'opus',sampleRate:sr,numberOfChannels:ch,bitrate:abps});
+  }
+  enc.encode(d);d.close();
+ }
+ if(enc){try{await enc.flush()}catch(_){}try{enc.close()}catch(_){}}
+ return{last};
+}
+</script>
+
+<script>
+const $=id=>document.getElementById(id);
+const MAGIC=new TextEncoder().encode('FRM1');
+let dir=null,sdir=null,stream=null,sources=[],actx=null,hasAudio=false;
+let worker=null,running=false,t0=0,tick=null,doneResolve=null;
+let queue=Promise.resolve(),pending=0,errors=0,lastErr='',bytesW=0,segIdx=0;
+let segParts=[],segBytes=0,segV0=null,segA0=null;
+let meta=null,frames=0,dropped=0,fpsN=0,fps=0;
+
+if(!window.showDirectoryPicker||!navigator.mediaDevices?.getDisplayMedia||!window.MediaStreamTrackProcessor)
+ document.body.insertAdjacentHTML('afterbegin','<p style="color:#e5484d">Use a recent desktop Chrome / ChromeOS Chrome over https (e.g. GitHub Pages).</p>');
+
+const fmt=s=>[s/3600|0,s/60%60|0,s%60|0].map(n=>String(n).padStart(2,'0')).join(':');
+const b64=buf=>btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+function ui(){
+ $('go').disabled=!(running||(dir&&stream));
+ $('dir').disabled=running;$('sel').disabled=running;
+ $('sysA').disabled=running;$('micA').disabled=running;$('q').disabled=running;$('sc').disabled=running;
+ if(!running)$('st').textContent=!dir&&!stream?'Pick a folder and a screen first.':!dir?'Pick a folder first.':!stream?'Select a screen to share first.':'Ready — press Start recording.'}
+
+$('dir').onclick=async()=>{try{
+ dir=await showDirectoryPicker({id:'frm-rec',mode:'readwrite'});
+ $('di').textContent=`${dir.name}: ready (a new rec-… subfolder is created for each recording)`;ui()}catch(e){}};
+
+function releaseStream(){
+ sources.forEach(s=>s.getTracks().forEach(t=>t.stop()));sources=[];
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ if(actx){actx.close().catch(()=>{});actx=null}
+ $('pv').srcObject=null;$('pv').hidden=true;
+ stream=null;hasAudio=false;$('si').textContent='Nothing selected'}
+
+$('sel').onclick=async()=>{
+ releaseStream();let disp,mic=null;
+ try{
+  disp=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:60,max:60}},audio:$('sysA').checked});
+ }catch(e){$('si').textContent=e.name=='NotAllowedError'?'Cancelled.':'Error: '+e.message;ui();return}
+ let note='';
+ if($('micA').checked){
+  try{mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){note=' Microphone unavailable ('+e.name+').'}}
+ sources=[disp,mic].filter(Boolean);
+ const vt=disp.getVideoTracks()[0],tracks=[vt];
+ const aStreams=sources.filter(s=>s.getAudioTracks().length);
+ if($('sysA').checked&&!disp.getAudioTracks().length)note+=' No system/tab audio was shared (tick "Also share audio" in the picker).';
+ if(aStreams.length==1)tracks.push(aStreams[0].getAudioTracks()[0]);
+ else if(aStreams.length>1){            // mix system + mic into one track
+  actx=new AudioContext({sampleRate:48000});const dest=actx.createMediaStreamDestination();
+  aStreams.forEach(s=>actx.createMediaStreamSource(new MediaStream(s.getAudioTracks())).connect(dest));
+  tracks.push(dest.stream.getAudioTracks()[0])}
+ hasAudio=tracks.length>1;
+ stream=new MediaStream(tracks);
+ vt.addEventListener('ended',()=>{running?stop():(releaseStream(),ui())});
+ const pv=$('pv');pv.srcObject=new MediaStream([vt]);pv.hidden=false;
+ const s=vt.getSettings();
+ $('si').textContent=`${vt.label||'Screen'} · ${s.width||'?'}×${s.height||'?'} · ${hasAudio?'with audio':'no audio'}.${note}`;
+ ui()};
+
+function job(fn){pending++;queue=queue.then(fn).catch(e=>{errors++;lastErr=e.message}).then(()=>{pending--})}
+
+function writeMeta(){
+ const txt=JSON.stringify(meta,null,1);
+ job(async()=>{const h=await sdir.getFileHandle('meta.json',{create:true});const w=await h.createWritable();await w.write(txt);await w.close()})}
+
+function flushSeg(){
+ if(!segParts.length)return;
+ const blob=new Blob([MAGIC,...segParts]);const n=++segIdx;
+ segParts=[];segBytes=0;segV0=segA0=null;
+ job(async()=>{
+  const h=await sdir.getFileHandle(`seg-${String(n).padStart(6,'0')}.frm`,{create:true});
+  const w=await h.createWritable();await w.write(blob);await w.close();bytesW+=blob.size})}
+
+// record layout: u8 type (1=JPEG frame, 2=Opus packet) | f64 timestamp (µs) | u32 length | payload
+function addRec(type,ts,payload,len){
+ const h=new ArrayBuffer(13),dv=new DataView(h);
+ dv.setUint8(0,type);dv.setFloat64(1,ts);dv.setUint32(9,len);
+ segParts.push(h,payload);segBytes+=13+len;
+ if(type===1){if(segV0===null)segV0=ts}else{if(segA0===null)segA0=ts}
+ if((type===1&&ts-segV0>=1e6)||(type===2&&ts-segA0>=1e6)||segBytes>32e6)flushSeg()}
+
+function onWorker(e){
+ const m=e.data;
+ if(m.t==='v'){frames=m.n;dropped=m.dropped;fpsN++;addRec(1,m.ts,m.blob,m.blob.size)}
+ else if(m.t==='a'){addRec(2,m.ts,new Uint8Array(m.data),m.data.byteLength)}
+ else if(m.t==='vmeta'){meta.width=m.w;meta.height=m.h;meta.firstVideoTs=m.firstTs;writeMeta()}
+ else if(m.t==='ameta'){meta.audio={sampleRate:m.sampleRate,channels:m.channels,firstTs:m.firstTs,description:m.description?b64(m.description):null};writeMeta()}
+ else if(m.t==='err'){errors++;lastErr=m.msg}
+ else if(m.t==='done'){
+  meta.lastVideoTs=m.lastV;meta.frames=m.frames;meta.dropped=m.dropped;
+  if(m.lastA!=null&&meta.audio)meta.audio.lastTs=m.lastA;
+  flushSeg();writeMeta();if(doneResolve)doneResolve()}}
+
+function stats(){
+ $('tm').textContent=fmt((performance.now()-t0)/1000);
+ fps=fpsN;fpsN=0;
+ $('st').textContent=`Recording… ${frames} frames, ~${fps} fps`;
+ $('sx').textContent=`${(bytesW/1e6).toFixed(0)} MB written · ${pending} writes waiting`;
+ const wn=$('wn');
+ if(errors){wn.hidden=false;wn.textContent=`Error: ${lastErr}`}
+ else if(dropped){wn.hidden=false;wn.textContent=`${dropped} frames dropped — the CPU can't keep up. Try Low quality or 75% / 50% resolution.`}
+ else if(pending>60){wn.hidden=false;wn.textContent='Writes are falling behind (slow Drive?) — memory use is growing.'}
+ else wn.hidden=true}
+
+async function start(){
+ if(!dir||!stream)return;
+ try{
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const name=`rec-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  sdir=await dir.getDirectoryHandle(name,{create:true});
+  $('di').textContent=`${dir.name}/${name}`;
+ }catch(e){$('st').textContent='Could not create folder: '+e.message;return}
+ queue=Promise.resolve();pending=0;errors=0;lastErr='';bytesW=0;segIdx=0;
+ segParts=[];segBytes=0;segV0=segA0=null;frames=0;dropped=0;fpsN=0;
+ const quality=+$('q').value,scale=+$('sc').value;
+ meta={format:'frm1',version:1,created:new Date().toISOString(),quality,scale,audio:null};
+ const vt=stream.getVideoTracks()[0],at=stream.getAudioTracks()[0];
+ const vp=new MediaStreamTrackProcessor({track:vt});
+ const msg={type:'start',video:vp.readable,quality,scale,abps:128000},tr=[vp.readable];
+ if(at){const ap=new MediaStreamTrackProcessor({track:at});msg.audio=ap.readable;tr.push(ap.readable)}
+ worker=new Worker(URL.createObjectURL(new Blob([$('wk').textContent],{type:'text/javascript'})));
+ worker.onmessage=onWorker;
+ worker.onerror=e=>{errors++;lastErr=e.message||'worker error'};
+ running=true;t0=performance.now();
+ worker.postMessage(msg,tr);
+ tick=setInterval(stats,1000);
+ $('go').textContent='Stop recording';$('go').classList.add('r');ui();stats()}
+
+async function stop(){
+ if(!running)return;running=false;
+ clearInterval(tick);
+ $('go').disabled=true;$('st').textContent='Finishing…';
+ const done=new Promise(r=>{doneResolve=r});
+ worker.postMessage({type:'stop'});
+ releaseStream();
+ await Promise.race([done,new Promise(r=>setTimeout(r,15000))]);
+ flushSeg();writeMeta();
+ await queue;
+ worker.terminate();worker=null;
+ $('go').textContent='Start recording';$('go').classList.remove('r');
+ ui();
+ $('st').textContent=`Saved ${frames} frames (${(bytesW/1e6).toFixed(0)} MB)${dropped?`, ${dropped} dropped`:''}.`;
+ $('sx').textContent='';
+ if(errors){$('wn').hidden=false;$('wn').textContent=`Error: ${lastErr}`}}
+
+$('go').onclick=()=>running?stop():start();
+addEventListener('beforeunload',e=>{if(running){e.preventDefault();e.returnValue=''}});
+ui();
+</script></body></html>
