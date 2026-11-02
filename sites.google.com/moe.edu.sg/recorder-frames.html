@@ -30,6 +30,8 @@ code{background:#0f1115;padding:1px 5px;border-radius:4px}
  <select id="q"><option value="0.92">High (largest)</option><option value="0.82" selected>Medium</option><option value="0.7">Low (smallest)</option></select>
  &nbsp;Resolution
  <select id="sc"><option value="1" selected>100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select></div>
+<div class="row">Saving
+ <select id="wm"><option value="now" selected>Every frame immediately (crash-safe)</option><option value="batch">Batched ~1 s (far fewer files)</option></select></div>
 <div class="m">Tick audio options before selecting. In Chrome's picker, also tick "Also share audio".</div><br>
 <button id="sel">Select screen to share</button>
 <div class="m" id="si">Nothing selected</div>
@@ -42,7 +44,7 @@ code{background:#0f1115;padding:1px 5px;border-radius:4px}
 <div class="m" id="sx"></div>
 <div class="m w" id="wn" hidden></div></div>
 
-<div class="m">Every captured frame is saved as a JPEG inside <code>seg-000001.frm</code> files (about 1 second each). Merge them with <b>export-frames.html</b>.</div>
+<div class="m">Every captured frame is saved as a JPEG inside <code>seg-00000001.frm</code> files. Merge them with <b>export-frames.html</b>.</div>
 
 <script id="wk" type="text/plain">
 let stopping=false,vReader=null,aReader=null;
@@ -129,7 +131,7 @@ const $=id=>document.getElementById(id);
 const MAGIC=new TextEncoder().encode('FRM1');
 let dir=null,sdir=null,stream=null,sources=[],actx=null,hasAudio=false;
 let worker=null,running=false,t0=0,tick=null,doneResolve=null;
-let queue=Promise.resolve(),pending=0,errors=0,lastErr='',bytesW=0,segIdx=0;
+let pending=0,active=0,waiting=[],metaQ=Promise.resolve(),errors=0,lastErr='',bytesW=0,segIdx=0,immediate=true;
 let segParts=[],segBytes=0,segV0=null,segA0=null;
 let meta=null,frames=0,dropped=0,fpsN=0,fps=0;
 
@@ -142,7 +144,7 @@ const b64=buf=>btoa(String.fromCharCode(...new Uint8Array(buf)));
 function ui(){
  $('go').disabled=!(running||(dir&&stream));
  $('dir').disabled=running;$('sel').disabled=running;
- $('sysA').disabled=running;$('micA').disabled=running;$('q').disabled=running;$('sc').disabled=running;
+ $('sysA').disabled=running;$('micA').disabled=running;$('q').disabled=running;$('sc').disabled=running;$('wm').disabled=running;
  if(!running)$('st').textContent=!dir&&!stream?'Pick a folder and a screen first.':!dir?'Pick a folder first.':!stream?'Select a screen to share first.':'Ready — press Start recording.'}
 
 $('dir').onclick=async()=>{try{
@@ -182,18 +184,30 @@ $('sel').onclick=async()=>{
  $('si').textContent=`${vt.label||'Screen'} · ${s.width||'?'}×${s.height||'?'} · ${hasAudio?'with audio':'no audio'}.${note}`;
  ui()};
 
-function job(fn){pending++;queue=queue.then(fn).catch(e=>{errors++;lastErr=e.message}).then(()=>{pending--})}
+// Up to 8 files are written at once so slow disks / Drive don't fall behind a 60 fps stream.
+function job(fn){
+ pending++;
+ const go=async()=>{
+  active++;
+  try{await fn()}catch(e){errors++;lastErr=e.message}
+  finally{active--;pending--;const n=waiting.shift();if(n)n()}};
+ if(active<8)go();else waiting.push(go)}
+const idle=async()=>{while(pending>0)await new Promise(r=>setTimeout(r,50))};
 
 function writeMeta(){
  const txt=JSON.stringify(meta,null,1);
- job(async()=>{const h=await sdir.getFileHandle('meta.json',{create:true});const w=await h.createWritable();await w.write(txt);await w.close()})}
+ pending++;
+ metaQ=metaQ.then(async()=>{
+  const h=await sdir.getFileHandle('meta.json',{create:true});
+  const w=await h.createWritable();await w.write(txt);await w.close()
+ }).catch(e=>{errors++;lastErr=e.message}).then(()=>{pending--})}
 
 function flushSeg(){
  if(!segParts.length)return;
  const blob=new Blob([MAGIC,...segParts]);const n=++segIdx;
  segParts=[];segBytes=0;segV0=segA0=null;
  job(async()=>{
-  const h=await sdir.getFileHandle(`seg-${String(n).padStart(6,'0')}.frm`,{create:true});
+  const h=await sdir.getFileHandle(`seg-${String(n).padStart(8,'0')}.frm`,{create:true});
   const w=await h.createWritable();await w.write(blob);await w.close();bytesW+=blob.size})}
 
 // record layout: u8 type (1=JPEG frame, 2=Opus packet) | f64 timestamp (µs) | u32 length | payload
@@ -202,7 +216,7 @@ function addRec(type,ts,payload,len){
  dv.setUint8(0,type);dv.setFloat64(1,ts);dv.setUint32(9,len);
  segParts.push(h,payload);segBytes+=13+len;
  if(type===1){if(segV0===null)segV0=ts}else{if(segA0===null)segA0=ts}
- if((type===1&&ts-segV0>=1e6)||(type===2&&ts-segA0>=1e6)||segBytes>32e6)flushSeg()}
+ if(immediate||(type===1&&ts-segV0>=1e6)||(type===2&&ts-segA0>=1e6)||segBytes>32e6)flushSeg()}
 
 function onWorker(e){
  const m=e.data;
@@ -224,7 +238,7 @@ function stats(){
  const wn=$('wn');
  if(errors){wn.hidden=false;wn.textContent=`Error: ${lastErr}`}
  else if(dropped){wn.hidden=false;wn.textContent=`${dropped} frames dropped — the CPU can't keep up. Try Low quality or 75% / 50% resolution.`}
- else if(pending>60){wn.hidden=false;wn.textContent='Writes are falling behind (slow Drive?) — memory use is growing.'}
+ else if(pending>(immediate?250:60)){wn.hidden=false;wn.textContent=`Writes are falling behind (${pending} queued) — slow disk/Drive? Memory use is growing.`}
  else wn.hidden=true}
 
 async function start(){
@@ -235,7 +249,7 @@ async function start(){
   sdir=await dir.getDirectoryHandle(name,{create:true});
   $('di').textContent=`${dir.name}/${name}`;
  }catch(e){$('st').textContent='Could not create folder: '+e.message;return}
- queue=Promise.resolve();pending=0;errors=0;lastErr='';bytesW=0;segIdx=0;
+ pending=0;active=0;waiting=[];metaQ=Promise.resolve();errors=0;lastErr='';bytesW=0;segIdx=0;immediate=$('wm').value==='now';
  segParts=[];segBytes=0;segV0=segA0=null;frames=0;dropped=0;fpsN=0;
  const quality=+$('q').value,scale=+$('sc').value;
  meta={format:'frm1',version:1,created:new Date().toISOString(),quality,scale,audio:null};
@@ -260,7 +274,7 @@ async function stop(){
  releaseStream();
  await Promise.race([done,new Promise(r=>setTimeout(r,15000))]);
  flushSeg();writeMeta();
- await queue;
+ await idle();
  worker.terminate();worker=null;
  $('go').textContent='Start recording';$('go').classList.remove('r');
  ui();

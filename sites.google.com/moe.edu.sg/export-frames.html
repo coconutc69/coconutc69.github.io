@@ -129,7 +129,7 @@ async function load(i){
  const s=sessions[i],files=[];let sz=0;
  for await(const[n,h]of s.dir.entries()){const m=/^seg-(\d+)\.frm$/.exec(n);if(m&&h.kind==='file')files.push({n:+m[1],h})}
  files.sort((a,b)=>a.n-b.n);
- for(const f of files)sz+=(await f.h.getFile()).size;
+ if(files.length<=3000)for(const f of files)sz+=(await f.h.getFile()).size;else sz=-1;
  let meta={};try{meta=JSON.parse(await(await(await s.dir.getFileHandle('meta.json')).getFile()).text())}catch(e){}
  if(!meta.width||meta.firstVideoTs==null){          // crashed early / meta missing: recover from the first frame
   for(const f of files){const buf=await(await f.h.getFile()).arrayBuffer();const r=parseSeg(buf).find(r=>r.t===1);
@@ -137,7 +137,8 @@ async function load(i){
     meta.width=bm.width;meta.height=bm.height;meta.firstVideoTs=r.ts;bm.close();meta.audio=meta.audio||null;break}}}
  if(!meta.width){$('di').textContent='Could not read any frames from that folder.';return}
  cur={files,meta,size:sz};
- $('di').textContent=`${s.name}: ${files.length} segments (~${fmt(files.length)}), ${(sz/1e6).toFixed(0)} MB, ${meta.width}×${meta.height}${meta.audio?' + audio':''}${meta.dropped?`, ${meta.dropped} frames were dropped while recording`:''}`;
+ const dur=meta.lastVideoTs!=null?` (~${fmt((meta.lastVideoTs-meta.firstVideoTs)/1e6)})`:'';
+ $('di').textContent=`${s.name}: ${files.length} files${dur}${sz>=0?`, ${(sz/1e6).toFixed(0)} MB`:''}, ${meta.width}×${meta.height}${meta.audio?' + audio':''}${meta.dropped?`, ${meta.dropped} frames were dropped while recording`:''}`;
  $('st').textContent='Ready.';$('go').disabled=false}
 
 /* ---------- export ---------- */
@@ -198,22 +199,28 @@ async function run(w){
   prev.bmp.close();prev={bmp}};
 
  const t0=performance.now();$('pg').max=files.length;
- for(let i=0;i<files.length;i++){
+ let i=0;
+ while(i<files.length){
   if(cancel)throw new Error('Cancelled');
-  const buf=await(await files[i].h.getFile()).arrayBuffer(),recs=parseSeg(buf),vr=[];
-  for(const r of recs){
+  // gather ~16 MB (max 200 files) so one-frame files and 1-second files both batch sensibly
+  const fl=[];let bytes=0;
+  while(i<files.length&&fl.length<200&&(bytes<16e6||!fl.length)){const f=await files[i].h.getFile();fl.push(f);bytes+=f.size;i++}
+  const bufs=await Promise.all(fl.map(f=>f.arrayBuffer()));
+  const vr=[];
+  for(const buf of bufs)for(const r of parseSeg(buf)){
+   r.buf=buf;
    if(r.t===2&&audio){const rel=r.ts-ba;lastARel=Math.max(lastARel,rel);mux.addA(Math.max(0,rel),new Uint8Array(buf.slice(r.off,r.off+r.len)))}
    else if(r.t===1)vr.push(r)}
   const DEPTH=6,dec=[];
-  const start=k=>{if(k<vr.length&&!dec[k])dec[k]=createImageBitmap(new Blob([new Uint8Array(buf,vr[k].off,vr[k].len)],{type:'image/jpeg'})).catch(()=>null)};
+  const start=k=>{if(k<vr.length&&!dec[k])dec[k]=createImageBitmap(new Blob([new Uint8Array(vr[k].buf,vr[k].off,vr[k].len)],{type:'image/jpeg'})).catch(()=>null)};
   for(let k=0;k<DEPTH;k++)start(k);
   for(let k=0;k<vr.length;k++){
    start(k+DEPTH);const bmp=await dec[k];dec[k]=null;
    if(bmp)await onFrame(bmp,vr[k].ts-bv)}
   await mux.drain();
-  const done=i+1,el_=(performance.now()-t0)/1000;
-  $('pg').value=done;
-  $('st').textContent=`Encoding ${done} / ${files.length} segments · ${(done/Math.max(el_,.1)).toFixed(2)}× realtime · about ${fmt(el_*(files.length-done)/done)} left`}
+  const el_=(performance.now()-t0)/1000;
+  $('pg').value=i;
+  $('st').textContent=`Encoding ${i} / ${files.length} files · about ${fmt(el_*(files.length-i)/i)} left (${fmt(mux.maxMs/1000)} of video so far)`}
 
  if(!vfr&&prev){
   const endRel=Math.max(lastRel,lastARel);
