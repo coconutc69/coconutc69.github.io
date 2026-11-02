@@ -10,31 +10,54 @@ button.r{background:#e5484d}
 button:disabled{opacity:.4;cursor:default}.m{color:#8b93a1;font-size:13px;margin-top:6px}
 .big{font-size:28px;font-variant-numeric:tabular-nums;margin:6px 0}
 .w{color:#f5a524}
+label{display:block;margin:4px 0;cursor:pointer}
+label input{margin-right:6px}
+video{width:100%;max-height:170px;background:#000;border-radius:8px;margin-top:10px}
 </style></head><body>
 <h1>⏺ Chunk Recorder</h1>
+
 <div class="c"><b>1. Project folder</b><br><br>
 <button id="dir">Select project folder</button>
 <div class="m" id="di">No folder selected (use an empty folder for a new recording)</div></div>
-<div class="c"><b>2. Record</b><br><br>
+
+<div class="c"><b>2. Screen &amp; audio</b><br><br>
+<label><input type="checkbox" id="sysA" checked>Share tab / system audio</label>
+<label><input type="checkbox" id="micA">Record microphone</label>
+<div class="m">Tick these before selecting. In Chrome's picker, also tick "Also share audio" for the audio to come through.</div><br>
+<button id="sel">Select screen to share</button>
+<div class="m" id="si">Nothing selected</div>
+<video id="pv" muted autoplay playsinline hidden></video></div>
+
+<div class="c"><b>3. Record</b><br><br>
 <button id="go" disabled>Start recording</button>
 <div class="big" id="tm">00:00:00</div>
-<div class="m" id="st">Pick a folder first.</div>
+<div class="m" id="st">Pick a folder and a screen first.</div>
 <div class="m w" id="wn" hidden></div></div>
+
 <div class="m">Saves 0.5-second standalone <code>part-000001.webm</code> files. Merge them with export.html.</div>
 <script>
 const $=id=>document.getElementById(id);
 const CHUNK=500;            // ms per part
-const BPS=8_000_000;        // video bitrate
-let dir=null,stream=null,cur=null,running=false,idx=0,width=6;
+const VBPS=8_000_000, ABPS=128_000;
+let dir=null,stream=null,sources=[],actx=null,hasAudio=false,mime='';
+let cur=null,running=false,idx=0,width=6;
 let next=0,timer=null,t0=0,tick=null;
-let queue=Promise.resolve(),pending=0,written=0,errors=0,lastErr='';
+let queue=Promise.resolve(),pending=0,written=0,errors=0,lastErr='',warn='';
 
 if(!window.showDirectoryPicker||!navigator.mediaDevices?.getDisplayMedia)
  document.body.insertAdjacentHTML('afterbegin','<p style="color:#e5484d">Use desktop Chrome / ChromeOS Chrome over https (e.g. GitHub Pages).</p>');
 
-const mime=['video/webm;codecs=vp8','video/webm;codecs=vp9','video/webm'].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t));
 const fmt=s=>[s/3600|0,s/60%60|0,s%60|0].map(n=>String(n).padStart(2,'0')).join(':');
 const pname=n=>`part-${String(n).padStart(width,'0')}.webm`;
+const pickMime=a=>(a?['video/webm;codecs=vp8,opus','video/webm;codecs=vp9,opus']:['video/webm;codecs=vp8','video/webm;codecs=vp9'])
+ .concat('video/webm').find(t=>MediaRecorder.isTypeSupported(t));
+
+function ui(){
+ $('go').disabled=!(running||(dir&&stream));
+ $('dir').disabled=running;$('sel').disabled=running;
+ $('sysA').disabled=running;$('micA').disabled=running;
+ if(!running&&!(dir&&stream))$('st').textContent=!dir&&!stream?'Pick a folder and a screen first.':!dir?'Pick a folder first.':'Select a screen to share first.';
+ else if(!running)$('st').textContent='Ready — press Start recording.'}
 
 $('dir').onclick=async()=>{try{
  dir=await showDirectoryPicker({id:'rec',mode:'readwrite'});
@@ -42,17 +65,50 @@ $('dir').onclick=async()=>{try{
  for await(const[n]of dir.entries()){const m=/^part-(\d+)\.webm$/.exec(n);if(m){count++;max=Math.max(max,+m[1]);w=Math.max(w,m[1].length)}}
  idx=max;width=w||6;
  $('di').textContent=count?`${dir.name}: ${count} existing parts, continuing after #${max}`:`${dir.name}: empty, ready`;
- $('st').textContent='Ready.';$('go').disabled=false}catch(e){}};
+ ui()}catch(e){}};
+
+function releaseStream(){
+ sources.forEach(s=>s.getTracks().forEach(t=>t.stop()));sources=[];
+ if(actx){actx.close().catch(()=>{});actx=null}
+ $('pv').srcObject=null;$('pv').hidden=true;
+ stream=null;hasAudio=false;$('si').textContent='Nothing selected'}
+
+$('sel').onclick=async()=>{
+ releaseStream();let disp,mic=null;
+ try{
+  disp=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:60,max:60}},audio:$('sysA').checked});
+ }catch(e){$('si').textContent=e.name=='NotAllowedError'?'Cancelled.':'Error: '+e.message;ui();return}
+ let note='';
+ if($('micA').checked){
+  try{mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){note=' Microphone unavailable ('+e.name+').'}}
+ sources=[disp,mic].filter(Boolean);
+ const vt=disp.getVideoTracks()[0],tracks=[vt];
+ const aStreams=sources.filter(s=>s.getAudioTracks().length);
+ if($('sysA').checked&&!disp.getAudioTracks().length)note+=' No system/tab audio was shared (tick "Also share audio" in the picker).';
+ if(aStreams.length==1)tracks.push(aStreams[0].getAudioTracks()[0]);
+ else if(aStreams.length>1){            // mix system + mic into one track
+  actx=new AudioContext();const dest=actx.createMediaStreamDestination();
+  aStreams.forEach(s=>actx.createMediaStreamSource(new MediaStream(s.getAudioTracks())).connect(dest));
+  tracks.push(dest.stream.getAudioTracks()[0])}
+ hasAudio=tracks.length>1;
+ stream=new MediaStream(tracks);
+ mime=pickMime(hasAudio);
+ vt.addEventListener('ended',()=>{running?stop():(releaseStream(),ui())});
+ const pv=$('pv');pv.srcObject=new MediaStream([vt]);pv.hidden=false;
+ const s=vt.getSettings();
+ $('si').textContent=`${vt.label||'Screen'} · ${s.width||'?'}×${s.height||'?'} · ${hasAudio?'with audio':'no audio'}.${note}`;
+ ui()};
 
 function makeRec(){
- const r=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:BPS});
+ const r=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:VBPS,...(hasAudio?{audioBitsPerSecond:ABPS}:{})});
  const parts=[];r.n=++idx;
  r.ondataavailable=e=>{if(e.data&&e.data.size)parts.push(e.data)};
  r.onstop=()=>save(new Blob(parts,{type:'video/webm'}),r.n);
  return r}
 
 function save(blob,n){
- if(blob.size<300)return;                 // nothing useful captured
+ if(blob.size<300)return;
  pending++;upd();
  queue=queue.then(async()=>{
   try{
@@ -62,40 +118,39 @@ function save(blob,n){
   pending--;upd()})}
 
 function upd(){
- $('st').textContent=running?`Recording… ${written} parts saved, ${pending} waiting to write`:`${written} parts saved${pending?`, ${pending} still writing…`:''}`;
+ if(running)$('st').textContent=`Recording… ${written} parts saved, ${pending} waiting to write`;
+ else if(written||pending)$('st').textContent=`${written} parts saved${pending?`, ${pending} still writing…`:''}`;
  const wn=$('wn');
  if(errors){wn.hidden=false;wn.textContent=`${errors} write error(s): ${lastErr}`}
  else if(pending>60){wn.hidden=false;wn.textContent='Writes are falling behind (slow Drive?) — memory use is growing.'}
  else wn.hidden=true}
 
-// Start the next recorder BEFORE stopping the old one, so no frames fall in a gap.
-// Each recorder produces a standalone file (own header + keyframe), which export.html needs.
+// Start the next recorder BEFORE stopping the old one so no frames fall in a gap.
+// Each recorder yields a standalone file (own header + keyframe), which export.html needs.
 function rotate(){
  if(!running)return;
  const old=cur;cur=makeRec();cur.start();old.stop();
  next+=CHUNK;timer=setTimeout(rotate,Math.max(0,next-performance.now()))}
 
-async function start(){
- try{
-  stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:60,max:60}},audio:false});
- }catch(e){$('st').textContent=e.name=='NotAllowedError'?'Cancelled.':'Error: '+e.message;return}
+function start(){
+ if(!dir||!stream)return;
  written=0;errors=0;pending=0;lastErr='';running=true;
- stream.getVideoTracks()[0].addEventListener('ended',stop);
  cur=makeRec();cur.start();
  t0=performance.now();next=t0+CHUNK;timer=setTimeout(rotate,CHUNK);
  tick=setInterval(()=>{$('tm').textContent=fmt((performance.now()-t0)/1000)},250);
- $('go').textContent='Stop recording';$('go').classList.add('r');$('dir').disabled=true;upd()}
+ $('go').textContent='Stop recording';$('go').classList.add('r');ui();upd()}
 
 async function stop(){
  if(!running)return;running=false;
  clearTimeout(timer);clearInterval(tick);
  try{cur.stop()}catch(e){}
- stream.getTracks().forEach(t=>t.stop());
+ releaseStream();
  $('go').disabled=true;$('st').textContent='Finishing writes…';
  await queue;await new Promise(r=>setTimeout(r,200));await queue;
  $('go').textContent='Start recording';$('go').classList.remove('r');
- $('go').disabled=false;$('dir').disabled=false;upd()}
+ ui();upd()}
 
 $('go').onclick=()=>running?stop():start();
 addEventListener('beforeunload',e=>{if(running){e.preventDefault();e.returnValue=''}});
+ui();
 </script></body></html>
