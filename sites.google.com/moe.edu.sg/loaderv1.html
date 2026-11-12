@@ -5,32 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZIP Site Viewer</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body { background: #0e1014; color: #e8eaf0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  #start { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; }
-  #start h1 { margin: 0; font-size: 28px; font-weight: 650; letter-spacing: -.01em; }
-  #start p { margin: 0; color: #9aa1b2; max-width: 440px; line-height: 1.5; }
-  .btn, #pick button { appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 600; color: #0e1014; background: #7cc4ff; padding: 14px 28px; border-radius: 12px; transition: transform .1s, background .15s; }
-  .btn:hover, #pick button:hover { background: #a3d6ff; }
-  .btn:active, #pick button:active { transform: scale(.97); }
-  #pick { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-  #pick button { padding: 9px 18px; font-weight: 500; font-size: 14px; }
-  #status { min-height: 1.5em; font-size: 14px; }
-  #status.err { color: #ff8a8a; }
-  body.drag #start { outline: 3px dashed #7cc4ff; outline-offset: -18px; }
-  body.live { overflow: hidden; background: #fff; }
-  #site { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
-  #reset { position: fixed; left: 8px; bottom: 8px; z-index: 2147483647; font: 12px system-ui, sans-serif; padding: 5px 9px; border-radius: 8px; border: 1px solid rgba(0,0,0,.25); background: rgba(20,20,24,.85); color: #fff; cursor: pointer; opacity: .12; transition: opacity .15s; }
-  #reset:hover, #reset:focus { opacity: 1; }
+  /* only what's needed to show the loaded site full screen */
+  body.live { margin: 0; overflow: hidden; }
+  #site { position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
+  #reset { position: fixed; left: 8px; bottom: 8px; z-index: 2147483647; opacity: .15; }
+  #reset:hover { opacity: 1; }
 </style>
 </head>
 <body>
 <main id="start">
   <h1>ZIP Site Viewer</h1>
   <p>Upload a .zip of a website and it opens right here as if it were hosted online. Everything runs in your browser - nothing is uploaded anywhere.</p>
-  <label class="btn"><input id="file" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>Choose .zip file</label>
+  <input id="file" type="file" accept=".zip,application/zip,application/x-zip-compressed">
   <p>or drop a .zip anywhere on this page</p>
   <div id="pick"></div>
   <p id="status"></p>
